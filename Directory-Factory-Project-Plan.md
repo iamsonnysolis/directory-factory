@@ -147,8 +147,8 @@ standardized runner (Phase 3).
 
 | ID | Task | Status | Notes |
 |---|---|---|---|
-| 1.1 | Copy `OLD_DATASET_COLLECTOR_PATH` (excluding `data/` and `.env`) into `scripts/collection/` | Not Started | |
-| 1.2 | Confirm it still runs standalone in its new location (same behavior, same DB schema) before changing anything | Not Started | |
+| 1.1 | Copy `OLD_DATASET_COLLECTOR_PATH` (excluding `data/` and `.env`) into `scripts/collection/` | Done | Copied 9 files: config.py, database.py, models.py, requirements.txt, services/{__init__,collector,google_places,grid_strategy,search_strategy}.py. Byte-identical to source. Excluded data/, .env, __pycache__/, venv/, main.py, api/, static/, schemas.py (dashboard/API layer, not collection engine). See note on imports below. |
+| 1.2 | Confirm it still runs standalone in its new location (same behavior, same DB schema) before changing anything | Done | VERIFIED via ad-hoc script: all imports resolve, init_db() creates all 5 tables (projects, jobs, places, search_terms, logs), Project CRUD round-trip works. DB schema matches. NOTE: scripts use flat imports (from config import, from services.xxx import) — they only run correctly when CWD is scripts/collection/. Will need path adjustment when wrapping for Phase 3 runner. Also: `httpx` is a runtime dep not in requirements.txt (only phonenumbers + python-slugify listed) — needs to be added to the new system's requirements. |
 | 1.3 | Wrap `collect_project()` and friends behind the standard script entry point defined in Phase 3 | Not Started | Do this after Phase 3's contract is defined |
 | 1.4 | Confirm no functional changes were introduced — this is a port, not a rewrite | Not Started | |
 | 1.5 | Update `requirements.txt` / merge into the new system's dependency list | Not Started | |
