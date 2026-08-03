@@ -1,0 +1,5 @@
+.env
+*.pyc __pycache__/ .pytest_cache/ .venv/ venv/
+.ruff_cache/ .mypy_cache/
+*.log runs.db
+.DS_Store
