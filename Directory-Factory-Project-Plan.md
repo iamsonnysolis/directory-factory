@@ -128,11 +128,11 @@ NEW_DIRECTORY_FACTORY_PATH/
 
 | ID | Task | Status | Notes |
 |---|---|---|---|
-| 0.1 | Confirm all path placeholders above | Not Started | |
-| 0.2 | Create `NEW_DIRECTORY_FACTORY_PATH` with the folder structure above | Not Started | |
-| 0.3 | Init git repo, initial commit | Not Started | |
-| 0.4 | Create `.env.example` listing every credential this system will need (Google Places key, Gemini key, Cloudflare token + account ID, GitHub token) | Not Started | |
-| 0.5 | Write `README.md` documenting the folder structure and where each phase's code lands | Not Started | |
+| 0.1 | Confirm all path placeholders above | Done | Shanon confirmed: NEW_DIRECTORY_FACTORY_PATH=/home/shanon/web-dev/directory-factory; NEW_NEAR_ME_DIRECTORY_PATH=/home/shanon/web-dev/near-me-directory (2026-08-03) |
+|| 0.2 | Create `NEW_DIRECTORY_FACTORY_PATH` with the folder structure above | Done | scripts/{collection,cleaning_enrichment,deploy}, import/, dashboard/, runner/ all created |
+|| 0.3 | Init git repo, initial commit | Done | git repo inited on `main`, initial commit `dcccffb` |
+|| 0.4 | Create `.env.example` listing every credential this system will need (Google Places key, Gemini key, Cloudflare token + account ID, GitHub token) | Done | .env.example created with all 5 credentials; D1 creds noted as runtime params |
+|| 0.5 | Write `README.md` documenting the folder structure and where each phase's code lands | Done | README created with architecture, language, folder tree, phases table |
 
 ---
 
