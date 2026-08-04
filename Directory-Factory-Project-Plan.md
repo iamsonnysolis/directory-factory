@@ -352,6 +352,10 @@ CREATE TABLE runs (
 | `status` | `success` / `error` |
 | `summary` | Short human-readable result |
 | `error` | Error message, if any |
+| `stdout` | Full stdout from the script (Q8, Dashboard-UX-Decisions.md) |
+| `stderr` | Full stderr from the script (Q8, Dashboard-UX-Decisions.md) |
+
+> **Schema note:** The `stdout` and `stderr` TEXT columns (above) are added per Dashboard-UX-Decisions.md Q8 to support the dashboard's full-log viewer. The Phase 3 `run.py` INSERT must capture `proc.stdout` and `proc.stderr` into these columns. This is a small schema addition to the Phase 3 table defined here — see Phase 8 task 8.2 for the endpoint that serves it.
 
 ## Tasks
 
@@ -457,12 +461,21 @@ about building it.
 
 | ID | Task | Status | Notes |
 |---|---|---|---|
-| 8.1 | Build the dashboard backend — reads `runs.db`, exposes endpoints to trigger any script via the runner (Phase 3) | Not Started | |
-| 8.2 | Build the Overview page (directory cards, status pills, pipeline stepper) | Not Started | |
-| 8.3 | Build the Directory Detail page (per-stage panels: Collect/Clean/Enrich/Upload/Deploy) | Not Started | |
-| 8.4 | Build the Config panel — `site_config` editor with live preview | Not Started | |
-| 8.5 | Build the Live Stats panel — pulls from the Cloudflare Analytics API once a site is deployed | Not Started | |
-| 8.6 | Wire every action button to the runner from Phase 3 — no bespoke logic in the dashboard itself | Not Started | |
+| 8.1 | Build dashboard backend — FastAPI app serving all routes, reading `runs.db`, wired to the Phase 3 runner (`runner/run.py:run_script`) | Not Started | Backend is the foundation — no page can be built without it. Server binds to `127.0.0.1` only (see Dashboard-UX-Decisions.md Q2). |
+| 8.2 | Expose backing API endpoints: trigger script (→ runner), project CRUD (→ collection DB), runs history (paginated/filtered from `runs.db`), run log detail (full stdout/stderr — see Phase 3 schema note), credentials read/write (`.env`), settings test endpoints, places search/filter, Cloudflare Analytics pass-through | Not Started | These endpoints are called by the pages below. The `stdout`/`stderr` columns for full log output are specified in Dashboard-UX-Decisions.md Q8 — this is the Phase 3 schema addition noted below. |
+| 8.3 | Build Overview page (`/`) — directory cards grid, status pills, 6-dot pipeline stepper, "+ New Directory" button | Not Started | Layout per Dashboard-UX-Decisions.md wireframes. |
+| 8.4 | Build "New Directory" modal — name→slug, niche label, target metros (multi-select), search terms (tag input), field tier | Not Started | Ported from `dataset-collector` create-project modal pattern. |
+| 8.5 | Build Directory Detail page shell (`/directories/{id}`) — tab navigation (Collect/Clean/Enrich/Upload/Deploy/Live Stats/Config/Runs), `[Delete...]` confirm dialog | Not Started | Tabs use plain JS show/hide. Default active tab = current pipeline stage. |
+| 8.6 | Build Collect tab panel — places table with map, search/filter, completeness-score filter, pagination, `[Retry Failed]` button, recent log feed, run-status pill + progress bar | Not Started | Straight port of `dataset-collector`'s places table (Dashboard-UX-Decisions.md Q12). `[Retry Failed]` re-runs only failed jobs (already exists in collector logic). |
+| 8.7 | Build shared Clean/Enrich/Upload/Deploy panel component — status pill + headline metric, `[Re-run]` button, `[View full log ▾]` expandable | Not Started | Whole-stage re-run only (Q5 is open — don't add per-item retry UI without checking with Shanon). While running: pill pulsing, `[Re-run]` disabled, 3-second polling. |
+| 8.8 | Build Clean-specific addition — editable feature taxonomy tag list (add/remove/rename) | Not Started | Per Phase 2.4 — reviewed before extraction logic runs. |
+| 8.9 | Build Deploy-specific addition — domain text input, `[Deploy]`/`[View Live Site ↗]` button | Not Started | All other deploy params (repo, branch, build command) fixed per "one shared template" decision. |
+| 8.10 | Build Live Stats tab — Cloudflare Analytics API pass-through (requests, visitors, cache %, line chart, top pages), empty state before deploy | Not Started | Plain pass-through call, no local storage of stats. |
+| 8.11 | Build Config tab — split form + live in-dashboard mock preview, fields per `site_config` schema (site_name, tagline, niche_label, domain, theme_primary_color, theme_secondary_color, logo_url, contact_email, contact_phone, social_links JSON, legal_privacy_copy, legal_terms_copy, og_image_url), `[Save]` to D1 `site_config` table | Not Started | Preview is HTML/CSS re-rendering on JS input events — no Astro dev server. Field list from Dashboard-UX-Decisions.md Q6. |
+| 8.12 | Build Runs tab — filterable (script, status, date range), paginated (20 per page), each row expands to full stdout/stderr from `runs.db` | Not Started | Same log-viewer pattern as per-stage panels. Default filter: current directory. |
+| 8.13 | Build Settings page (`/settings`) — masked credential fields (Google Places, Gemini, Cloudflare token+account ID, GitHub) with per-field `[Test]` buttons, default field tier, default grid step; `[Save]` to `.env` | Not Started | Each `[Test]` hits the corresponding endpoint from task 8.2. Bottom-right toasts on save (teal success/red error). |
+| 8.14 | Build global shell — top bar (logo/name + Overview/Settings nav links), status pill legend, toast notifications (bottom-right, auto-dismiss ~4s) | Not Started | Used across all pages. Desktop-only (no mobile breakpoints). |
+| 8.15 | Wire every action button to the runner from Phase 3 — no bespoke script-invocation logic in the dashboard itself | Not Started | All stage runs, deploys, test endpoints go through `runner/run_script`. Dashboard calls the runner API endpoint from task 8.2 only.
 
 ---
 
