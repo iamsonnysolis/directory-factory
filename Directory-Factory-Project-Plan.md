@@ -134,8 +134,34 @@ NEW_DIRECTORY_FACTORY_PATH/
 || 0.4 | Create `.env.example` listing every credential this system will need (Google Places key, Gemini key, Cloudflare token + account ID, GitHub token) | Done | .env.example created with all 5 credentials; D1 creds noted as runtime params |
 || 0.5 | Write `README.md` documenting the folder structure and where each phase's code lands | Done | README created with architecture, language, folder tree, phases table |
 
----
+## Test Process
 
+### Prerequisites
+- None. No credentials or external services needed for Phase 0.
+
+### Steps
+1. Check the repo exists and has the right structure:
+   ```bash
+   cd /home/shanon/web-dev/directory-factory
+   ls -d scripts/ import/ dashboard/ runner/ 2>&1
+   ls .env.example .gitignore README.md
+   ```
+2. Verify `.env.example` lists all 5 credentials:
+   ```bash
+   grep -c "REDACTED" .env.example  # should be 5
+   ```
+3. Verify `.gitignore` has per-line patterns:
+   ```bash
+   cat .gitignore | head -5
+   ```
+
+### Expected Results
+- Directory structure matches the plan:
+  `scripts/{collection,cleaning_enrichment,deploy}`, `import/`, `dashboard/`, `runner/`
+- `.env.example` contains entries for: `GOOGLE_PLACES_API_KEY`, `GEMINI_API_KEY`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `GITHUB_TOKEN`
+- `.gitignore` has one pattern per line (no space-separated lists)
+
+---
 # Phase 1: Port the Data Collection Engine
 
 ## Objective
@@ -152,6 +178,45 @@ standardized runner (Phase 3).
 | 1.3 | Wrap `collect_project()` and friends behind the standard script entry point defined in Phase 3 | Done | Created `scripts/collection/collect.py` — thin wrapper using @script_main. Sets up sys.path for flat imports (scripts/collection/ on path). Calls asyncio.run(collect_project(project_id)). Reports place/job counts from DB. Runnable via `python runner/run.py collection.collect --project-id=N`. |
 | 1.4 | Confirm no functional changes were introduced — this is a port, not a rewrite | Done | Collection engine files are byte-identical to dataset-collector source (verified in Phase 1.2). Only the calling interface changed — collect.py is a new wrapper that delegates to the original functions without modification. No changes to collector.py, google_places.py, or any collection engine file. |
 | 1.5 | Update `requirements.txt` / merge into the new system's dependency list | Done | Created unified `requirements.txt` at project root. Added missing `httpx>=0.27.0` (was a runtime dep not listed in original requirements.txt). Added `aiosqlite`, `SQLAlchemy`, `pydantic-settings` (collection engine deps). Added `python-slugify`, `google-generativeai` (Phase 2 enrichment deps). Runner is stdlib-only. |
+
+## Test Process
+
+### Prerequisites
+- Create a `.env` file with at minimum `GOOGLE_PLACES_API_KEY=***  (the collection engine can't initialize `Settings` without it).
+  ```bash
+  cp .env.example .env
+  # Edit .env, paste a real Google Places API key
+  ```
+- Ensure the venv has the deps installed:
+  ```bash
+  source .venv/bin/activate  # or create it: python3 -m venv .venv && source .venv/bin/activate
+  pip install -r requirements.txt
+  ```
+
+### Steps
+1. **Verify collection engine imports resolve standalone:**
+   ```bash
+   cd scripts/collection
+   python3 -c "from config import settings; from database import init_db; from services.collector import collect_project; print('Imports OK')"
+   ```
+2. **Verify `init_db()` creates all 5 tables:**
+   ```bash
+   python3 -c "import asyncio; from database import init_db; asyncio.run(init_db())"
+   sqlite3 data/collector.db ".tables"  # should show: jobs, log, place, project, search_term
+   ```
+3. **Verify `collect_project()` is callable via the Phase 3 runner:**
+   ```bash
+   cd /home/shanon/web-dev/directory-factory
+   python runner/run.py collection.collect --project-id=1
+   # Creates a run row in runs.db, attempts collection (may 403 if key invalid — that's OK, code path works)
+   sqlite3 runs.db "SELECT * FROM runs ORDER BY id DESC LIMIT 1;"
+   ```
+
+### Expected Results
+- All three imports resolve with no errors
+- `init_db()` creates tables: `projects`, `jobs`, `places`, `search_terms`, `logs`
+- `collect_project()` runs (a 403 from Google Places means the key is invalid — not a code issue)
+- Run is logged to `runs.db` with stdout/stderr columns populated
 
 ## Constraints
 - No functional changes to the collection logic itself during the port —
@@ -185,7 +250,58 @@ scripts/cleaning_enrichment/
 | 2.4 | Read `OLD_TOILETSNEARME_DATA_PATH/generate-eeat.js` in full. Write a short plain-English summary of its prompt structure and content types before writing any Python | Done | Written `scripts/cleaning_enrichment/generate_eeat_stats_summary.md`. Content types generalized: description, services, specialties, seo_keywords, seo_meta_desc. Prompt builder uses google-generativeai with retry/backoff. |
 | 2.5 | Write `enrichment.py` in Python using `google-generativeai`, generating: business description, services list, specialties, SEO keywords, SEO meta description — generic content types instead of toilet-specific EEAT categories. Function signature: `enrich_place(cleaned_record: dict) -> dict` | Done | VERIFIED: build_place_prompt + call_gemini structure confirmed. enrich_place returns dict with 5 content fields + ai_model + generated_at. 10/10 enrichment checks PASS. |
 | 2.6 | Read `OLD_TOILETSNEARME_DATA_PATH/generate-stats.js` for its composite-score approach, then add a `compute_quality_score(cleaned_record: dict, enriched_record: dict) -> int` function to `enrichment.py` | Done | VERIFIED: 4 composite functions ported (calc_accessibility_score, calc_family_score, calc_traveller_score, calc_provision_score) + compute_quality_score. 8/8 score checks PASS. |
-| 2.7 | Wrap `cleaning.py` and `enrichment.py` behind the standard script entry point from Phase 3 (see the `@script_main` pattern there) | Not Started | Do this after Phase 3 exists |
+| 2.7 | Wrap `cleaning.py` and `enrichment.py` behind the standard script entry point from Phase 3 (see the `@script_main` pattern there) | Done | Added `__main__` blocks to both files with @script_main. `cleaning.py` reads raw_json from collector.db, writes cleaned_*.jsonl. `enrichment.py` reads cleaned JSONL, calls enrich_place() via Gemini (skip_ai supported), writes enriched_*.jsonl with quality scores. Both verified via runner end-to-end. |
+
+## Test Process
+
+### Prerequisites
+- No API keys needed for basic cleanup/enrichment tests (`enrich_place` supports `skip_ai=true` to skip Gemini calls).
+- For the full enrichment test (optional), create `.env` with `GEMINI_API_KEY=*** Ensure deps are installed:
+  ```bash
+  source .venv/bin/activate
+  pip install -r requirements.txt
+  ```
+
+### Steps
+1. **Test cleaning.py library functions standalone:**
+   ```bash
+   cd scripts/cleaning_enrichment
+   python3 -c "
+   from cleaning import clean_place, slugify, parse_opening_hours, derive_features, dedupe_records
+   print('Library imports OK')
+   raw = {'displayName': {'text': 'Test Cafe'}, 'formattedAddress': 'Sydney NSW 2000'}
+   cleaned = clean_place(raw)
+   print(f'Name: {cleaned[\"name\"]}, Slug: {cleaned[\"slug\"]}')
+   "
+   ```
+2. **Test enrichment.py library functions:**
+   ```bash
+   python3 -c "
+   from enrichment import compute_quality_score, build_place_prompt
+   print('Library imports OK')
+   score = compute_quality_score({'name': 'Test'}, {})
+   print(f'Score: {score} (type: {type(score).__name__})')
+   "
+   ```
+3. **Test full pipeline via runner (with test data):**
+   ```bash
+   cd /home/shanon/web-dev/directory-factory
+   # Insert a test place with raw_json into collector.db first, then:
+   python runner/run.py cleaning.clean --project-id=9999 --params='{"dry_run": false}'
+   python runner/run.py enrichment.enrich --project-id=9999 --params='{"skip_ai": true}'
+   cat data/cleaned_9999.jsonl      # should have cleaned record
+   cat data/enriched_9999.jsonl    # should have enriched record with quality_score
+   sqlite3 runs.db "SELECT script_name, status FROM runs WHERE project_id=9999;"
+   ```
+
+### Expected Results
+- All library functions import and execute without errors
+- `clean_place()` returns a dict with keys: `name`, `slug`, `locality`, `state_code`, `postal_code`, `lat`, `lng`, `quality_score`, `hours_rows`, `feature_keys`
+- `compute_quality_score()` returns an integer in 0–100 range
+- `build_place_prompt()` returns a non-empty string containing the business name
+- Cleaning script reads `raw_json` from `collector.db`, writes `cleaned_*.jsonl`
+- Enrichment script reads `cleaned_*.jsonl`, writes `enriched_*.jsonl` with quality scores
+- Both runs logged to `runs.db` with `status=success`
 
 ## Constraints
 - No JavaScript in the new repo. If a piece of `enrich.js` or
@@ -367,6 +483,61 @@ CREATE TABLE runs (
 | 3.4 | Test the runner manually with a throwaway script that just returns `{"summary": "test ok"}` — confirm a row lands in `runs.db` | Done | VERIFIED: throwaway script with @script_main, run_script() returned correct JSON, row logged in runs.db with stdout/stderr captured. Error path also tested (exception → status=error logged). |
 | 3.5 | Wrap Phase 1 (collection) scripts using the `@script_main` decorator pattern | Done | Created `scripts/collection/collect.py` — thin wrapper that sets up sys.path for flat imports, calls asyncio.run(collect_project(project_id)), reports counts from DB. |
 | 3.6 | Wrap Phase 2 (cleaning/enrichment) scripts using the `@script_main` decorator pattern | Done | Added `__main__` blocks to `cleaning.py` and `enrichment.py` with @script_main. cleaning.py reads raw_json from collector.db, writes cleaned_*.jsonl. enrichment.py reads cleaned JSONL, calls enrich_place() via Gemini, writes enriched_*.jsonl with quality scores. |
+
+## Test Process
+
+### Prerequisites
+- Ensure deps are installed:
+  ```bash
+  source .venv/bin/activate
+  pip install -r requirements.txt
+  ```
+
+### Steps
+1. **Test the runner with a throwaway script:**
+   ```bash
+   cd /home/shanon/web-dev/directory-factory
+   cat > /tmp/test_script.py << 'EOF'
+   import sys, os
+   sys.path.insert(0, os.path.join(os.path.dirname(__file__), "scripts", "runner"))
+   from runner.contract import script_main
+
+   @script_main
+   def main(project_id: int, params: dict) -> dict:
+       return {"summary": "test ok", "counts": {"project_id": project_id}}
+
+   if __name__ == "__main__":
+       main()
+   EOF
+   PYTHONPATH=scripts/runner python /tmp/test_script.py --project-id 1 --params '{}'
+   # Should output: {"status": "success", "summary": "test ok", "counts": {"project_id": 1}, ...}
+   ```
+2. **Test end-to-end pipeline (cleaning + enrichment):**
+   ```bash
+   # Insert test data into collector.db (place with raw_json), then:
+   python runner/run.py cleaning.clean --project-id=8888 --params='{"dry_run": false}'
+   python runner/run.py enrichment.enrich --project-id=8888 --params='{"skip_ai": true}'
+   sqlite3 runs.db "SELECT script_name, status, started_at, finished_at, LENGTH(stdout), LENGTH(stderr) FROM runs WHERE project_id=8888 ORDER BY id;"
+   cat data/cleaned_8888.jsonl
+   cat data/enriched_8888.jsonl
+   ```
+3. **Test error handling:**
+   ```bash
+   python runner/run.py collection.collect --project-id=99999  # nonexistent project
+   # Should return status=error, exit code 1, error message in output
+   sqlite3 runs.db "SELECT status, error FROM runs ORDER BY id DESC LIMIT 1;"
+   ```
+4. **Test runs.db schema has stdout/stderr columns:**
+   ```bash
+   sqlite3 runs.db ".schema runs" | grep -E "stdout|stderr"
+   ```
+
+### Expected Results
+- Throwaway script returns `{"status": "success", ...}` with the provided summary/counts
+- Cleaning + enrichment pipeline produces `cleaned_*.jsonl` and `enriched_*.jsonl` with quality scores
+- `runs.db` has rows for each run with `status=success`, non-empty `stdout`, and `stderr` populated
+- Error case returns `status=error` with error message, exit code 1, and row logged in `runs.db`
+- `runs` table schema includes `stdout TEXT` and `stderr TEXT` columns (added per Q8)
 
 ---
 
