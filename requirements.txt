@@ -1,0 +1,16 @@
+# Directory Factory — unified dependency list
+# Runtime dependencies for all script phases (collection, cleaning, enrichment, deploy)
+
+# Phase 1: Collection engine (ported from dataset-collector)
+httpx>=0.27.0
+aiosqlite>=0.20.0
+SQLAlchemy>=2.0.0
+pydantic-settings>=2.0.0
+phonenumbers>=8.13.0
+
+# Phase 2: Cleaning + enrichment (ported from toiletsnearme-data)
+python-slugify>=8.0.0
+google-generativeai>=0.8.0
+
+# Phase 3: Standardized script runner
+# (stdlib only — argparse, sqlite3, subprocess, json, os, sys)

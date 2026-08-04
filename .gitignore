@@ -1,6 +1,6 @@
 .env
 *.pyc
-__pycache__
+__pycache__/
 *.pyo
 .pytest_cache/
 .ruff_cache/
@@ -9,4 +9,7 @@ __pycache__
 venv/
 *.log
 runs.db
+.data/
+data/
+scripts/collection/data/*.db
 .DS_Store

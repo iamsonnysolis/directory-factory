@@ -15,8 +15,13 @@ Content types (generic — not toilet-specific, per Phase 2.5):
 Quality score (ported from ``generate-stats.js``):
   Uses the four composite score functions adapted for per-place data.
   Returns a single 0–100 integer.
+
+The library functions are pure. The ``__main__`` block adds a script entry
+point via the ``@script_main`` contract for Phase 3 invocation.
 """
 
+import os
+import sys
 import asyncio
 import json
 import logging
@@ -386,3 +391,106 @@ def compute_quality_score(cleaned_record: dict, enriched_record: dict | None = N
     )
 
     return min(round(score), 100)
+
+
+# ─── Script entry point (Phase 3.6 / 2.7) ─────────────────────────────────────
+# Allows the file to be invoked directly by runner/run.py via @script_main.
+# Reads cleaned records from data/cleaned_<project_id>.jsonl, enriches each
+# with AI content and quality score, writes to data/enriched_<project_id>.jsonl.
+
+if __name__ == "__main__":
+    # __file__ = directory-factory/scripts/cleaning_enrichment/enrichment.py
+    #   dirname(1) = scripts/cleaning_enrichment
+    #   dirname(2) = scripts  ← _SCRIPTS_DIR
+    #   dirname(3) = directory-factory  ← _PROJECT_ROOT
+    _SCRIPTS_DIR = os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))
+    )
+    _PROJECT_ROOT = os.path.dirname(_SCRIPTS_DIR)
+    _RUNNER_DIR = os.path.join(_SCRIPTS_DIR, "runner")
+    for p in (_SCRIPTS_DIR, _RUNNER_DIR):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    from runner.contract import script_main
+
+    _DATA_DIR = os.path.join(_PROJECT_ROOT, "data")
+
+    @script_main
+    def main(project_id: int, params: dict) -> dict:
+        """Enrich cleaned place records with AI content and quality scores.
+
+        Reads ``data/cleaned_<project_id>.jsonl``, calls ``enrich_place()``
+        on each record (via Gemini), computes ``compute_quality_score()``,
+        and writes results to ``data/enriched_<project_id>.jsonl``.
+
+        Args:
+            project_id: The collection project ID.
+            params: Optional parameters:
+                - ``max_places``: Limit number of places to enrich (for testing).
+                - ``skip_ai``: If True, skip Gemini call, just compute scores.
+                - ``model``: Gemini model name to use.
+        """
+        input_path = os.path.join(_DATA_DIR, f"cleaned_{project_id}.jsonl")
+        if not os.path.isfile(input_path):
+            raise FileNotFoundError(
+                f"Cleaned data not found at {input_path}. "
+                "Run cleaning.clean first."
+            )
+
+        max_places = params.get("max_places")
+        skip_ai = params.get("skip_ai", False)
+        model_name = params.get("model", "gemini-2.5-flash-lite")
+
+        records = []
+        with open(input_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+
+        if max_places:
+            records = records[:max_places]
+
+        enriched_records = []
+        for record in records:
+            # Compute quality score (doesn't need AI)
+            score = compute_quality_score(record, None)
+            record["quality_score"] = score
+
+            # Generate AI content (needs Gemini API key)
+            if skip_ai:
+                record["ai_generated"] = False
+            else:
+                try:
+                    content = asyncio.run(enrich_place(record))
+                    record["enrichment"] = content
+                    record["ai_generated"] = True
+                except Exception as e:
+                    record["enrichment_error"] = str(e)
+                    record["ai_generated"] = False
+
+            enriched_records.append(record)
+
+        # Write enriched records
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        output_path = os.path.join(_DATA_DIR, f"enriched_{project_id}.jsonl")
+        with open(output_path, "w") as f:
+            for record in enriched_records:
+                f.write(json.dumps(record) + "\n")
+
+        ai_count = sum(1 for r in enriched_records if r.get("ai_generated"))
+        error_count = sum(1 for r in enriched_records if "enrichment_error" in r)
+
+        return {
+            "summary": f"Enriched {len(enriched_records)} places for project {project_id} "
+                       f"({ai_count} AI-generated, {error_count} AI errors)",
+            "counts": {
+                "places": len(enriched_records),
+                "ai_generated": ai_count,
+                "ai_errors": error_count,
+                "output_file": f"data/enriched_{project_id}.jsonl",
+            },
+        }
+
+    main()

@@ -13,10 +13,13 @@ Cleaning steps (mirroring enrich.js):
   6. Opening-hours parsing (adapted from ``parse-hours.js``)
   7. Feature extraction (replaces CSV→feature-column mapping)
 
-No network, no database — runs entirely locally.
+The library functions (``clean_place``, ``clean_text``, etc.) are pure —
+no network, no database. The ``__main__`` block at the bottom adds a DB-backed
+script entry point via the ``@script_main`` contract for Phase 3 invocation.
 """
 
 import re
+import sys
 import unicodedata
 from datetime import date, datetime
 from typing import Any
@@ -865,3 +868,120 @@ def clean_place(raw_json: dict) -> dict:
         "data_completeness_score": completeness,
         "cleaned_at": datetime.utcnow().isoformat(),
     }
+
+
+# ─── Script entry point (Phase 3.6 / 2.7) ─────────────────────────────────────
+# This block allows the file to be invoked directly by runner/run.py via the
+# @script_main contract. It reads raw JSON from the collection engine's DB,
+# cleans each place, and writes cleaned records to a JSONL file.
+
+if __name__ == "__main__":
+    import json
+    import os
+    import sqlite3
+
+    # Set up paths so we can import runner.contract and the collection DB models
+    # __file__ = directory-factory/scripts/cleaning_enrichment/cleaning.py
+    #   dirname(1) = scripts/cleaning_enrichment
+    #   dirname(2) = scripts  ← _SCRIPTS_DIR
+    #   dirname(3) = directory-factory  ← _PROJECT_ROOT
+    _SCRIPTS_DIR = os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))
+    )
+    _PROJECT_ROOT = os.path.dirname(_SCRIPTS_DIR)
+    _RUNNER_DIR = os.path.join(_SCRIPTS_DIR, "runner")
+    _COLLECTION_DIR = os.path.join(_SCRIPTS_DIR, "collection")
+
+    # scripts/ on path → makes `runner` importable as a package
+    # runner/ on path → makes `contract` importable directly
+    # collection/ on path → makes flat imports (from config import) work
+    for p in (_SCRIPTS_DIR, _RUNNER_DIR, _COLLECTION_DIR):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    from runner.contract import script_main
+
+    _DATA_DIR = os.path.join(_SCRIPTS_DIR, "collection", "data")
+    _COLLECTOR_DB = os.path.join(_DATA_DIR, "collector.db")
+
+    @script_main
+    def main(project_id: int, params: dict) -> dict:
+        """Clean all raw places for a project.
+
+        Reads raw_json from the collection DB's ``places`` table, runs
+        ``clean_place()`` on each, and writes cleaned records to
+        ``data/cleaned_<project_id>.jsonl``.
+
+        Args:
+            project_id: The collection project ID.
+            params: Optional parameters:
+                - ``taxonomy_path``: Path to a per-niche feature taxonomy JSON.
+                - ``dry_run``: If True, don't write output file.
+        """
+        import datetime as _dt
+
+        if not os.path.isfile(_COLLECTOR_DB):
+            raise FileNotFoundError(
+                f"Collector DB not found at {_COLLECTOR_DB}. "
+                "Run collection.collect first."
+            )
+
+        dry_run = params.get("dry_run", False)
+        taxonomy = None
+        taxonomy_path = params.get("taxonomy_path")
+        if taxonomy_path and os.path.isfile(taxonomy_path):
+            with open(taxonomy_path) as f:
+                taxonomy = json.load(f)
+
+        conn = sqlite3.connect(_COLLECTOR_DB)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT id, place_id, raw_json FROM places WHERE project_id = ? ORDER BY id",
+            (project_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            return {
+                "summary": f"No raw places found for project {project_id}",
+                "counts": {"places": 0, "cleaned": 0},
+            }
+
+        cleaned_records = []
+        skipped = 0
+        for row in rows:
+            try:
+                raw_json = json.loads(row["raw_json"])
+                cleaned = clean_place(raw_json)
+                # Inject taxonomy-filtered features if provided
+                if taxonomy:
+                    cleaned["feature_keys"] = [
+                        f["feature_key"] for f in derive_features(raw_json, taxonomy)
+                    ]
+                cleaned["source_place_db_id"] = row["id"]
+                cleaned_records.append(cleaned)
+            except Exception:
+                skipped += 1
+
+        if not dry_run:
+            output_dir = os.path.join(_PROJECT_ROOT, "data")
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(output_dir, f"cleaned_{project_id}.jsonl")
+            with open(output_path, "w") as f:
+                for record in cleaned_records:
+                    f.write(json.dumps(record) + "\n")
+
+        return {
+            "summary": f"Cleaned {len(cleaned_records)} places for project {project_id} "
+                       f"({skipped} skipped)",
+            "counts": {
+                "places": len(rows),
+                "cleaned": len(cleaned_records),
+                "skipped": skipped,
+                "output_file": f"data/cleaned_{project_id}.jsonl" if not dry_run else None,
+            },
+        }
+
+    main()
+

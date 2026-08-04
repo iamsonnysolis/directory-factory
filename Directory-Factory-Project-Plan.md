@@ -149,9 +149,9 @@ standardized runner (Phase 3).
 |---|---|---|---|
 | 1.1 | Copy `OLD_DATASET_COLLECTOR_PATH` (excluding `data/` and `.env`) into `scripts/collection/` | Done | Copied 9 files: config.py, database.py, models.py, requirements.txt, services/{__init__,collector,google_places,grid_strategy,search_strategy}.py. Byte-identical to source. Excluded data/, .env, __pycache__/, venv/, main.py, api/, static/, schemas.py (dashboard/API layer, not collection engine). See note on imports below. |
 | 1.2 | Confirm it still runs standalone in its new location (same behavior, same DB schema) before changing anything | Done | VERIFIED via ad-hoc script: all imports resolve, init_db() creates all 5 tables (projects, jobs, places, search_terms, logs), Project CRUD round-trip works. DB schema matches. NOTE: scripts use flat imports (from config import, from services.xxx import) — they only run correctly when CWD is scripts/collection/. Will need path adjustment when wrapping for Phase 3 runner. Also: `httpx` is a runtime dep not in requirements.txt (only phonenumbers + python-slugify listed) — needs to be added to the new system's requirements. |
-| 1.3 | Wrap `collect_project()` and friends behind the standard script entry point defined in Phase 3 | Not Started | Do this after Phase 3's contract is defined |
-| 1.4 | Confirm no functional changes were introduced — this is a port, not a rewrite | Not Started | |
-| 1.5 | Update `requirements.txt` / merge into the new system's dependency list | Not Started | |
+| 1.3 | Wrap `collect_project()` and friends behind the standard script entry point defined in Phase 3 | Done | Created `scripts/collection/collect.py` — thin wrapper using @script_main. Sets up sys.path for flat imports (scripts/collection/ on path). Calls asyncio.run(collect_project(project_id)). Reports place/job counts from DB. Runnable via `python runner/run.py collection.collect --project-id=N`. |
+| 1.4 | Confirm no functional changes were introduced — this is a port, not a rewrite | Done | Collection engine files are byte-identical to dataset-collector source (verified in Phase 1.2). Only the calling interface changed — collect.py is a new wrapper that delegates to the original functions without modification. No changes to collector.py, google_places.py, or any collection engine file. |
+| 1.5 | Update `requirements.txt` / merge into the new system's dependency list | Done | Created unified `requirements.txt` at project root. Added missing `httpx>=0.27.0` (was a runtime dep not listed in original requirements.txt). Added `aiosqlite`, `SQLAlchemy`, `pydantic-settings` (collection engine deps). Added `python-slugify`, `google-generativeai` (Phase 2 enrichment deps). Runner is stdlib-only. |
 
 ## Constraints
 - No functional changes to the collection logic itself during the port —
@@ -361,12 +361,12 @@ CREATE TABLE runs (
 
 | ID | Task | Status | Notes |
 |---|---|---|---|
-| 3.1 | Create `runner/contract.py` exactly as shown above | Not Started | |
-| 3.2 | Create `runs.db` and run the `CREATE TABLE runs` SQL above against it | Not Started | |
-| 3.3 | Create `runner/run.py` exactly as shown above | Not Started | |
-| 3.4 | Test the runner manually with a throwaway script that just returns `{"summary": "test ok"}` — confirm a row lands in `runs.db` | Not Started | Do this before wiring in real scripts |
-| 3.5 | Wrap Phase 1 (collection) scripts using the `@script_main` decorator pattern | Not Started | Depends on 3.1 |
-| 3.6 | Wrap Phase 2 (cleaning/enrichment) scripts using the `@script_main` decorator pattern | Not Started | Depends on 3.1 |
+| 3.1 | Create `runner/contract.py` exactly as shown above | Done | Created `scripts/runner/contract.py` — @script_main decorator with argparse, JSON params, try/except wrapper, exit codes. |
+| 3.2 | Create `runs.db` and run the `CREATE TABLE runs` SQL above against it | Done | Created `runner/run.py:init_runs_db()` with CREATE TABLE IF NOT EXISTS. Schema includes stdout/stderr TEXT columns per Q8 schema note. |
+| 3.3 | Create `runner/run.py` exactly as shown above | Done | Created `scripts/runner/run.py` with SCRIPT_MAP (5 entries), run_script(), CLI. Fixed from plan spec: uses sys.executable + sys.path resolution, captures stdout/stderr into DB columns, resolves paths dynamically from project root. |
+| 3.4 | Test the runner manually with a throwaway script that just returns `{"summary": "test ok"}` — confirm a row lands in `runs.db` | Done | VERIFIED: throwaway script with @script_main, run_script() returned correct JSON, row logged in runs.db with stdout/stderr captured. Error path also tested (exception → status=error logged). |
+| 3.5 | Wrap Phase 1 (collection) scripts using the `@script_main` decorator pattern | Done | Created `scripts/collection/collect.py` — thin wrapper that sets up sys.path for flat imports, calls asyncio.run(collect_project(project_id)), reports counts from DB. |
+| 3.6 | Wrap Phase 2 (cleaning/enrichment) scripts using the `@script_main` decorator pattern | Done | Added `__main__` blocks to `cleaning.py` and `enrichment.py` with @script_main. cleaning.py reads raw_json from collector.db, writes cleaned_*.jsonl. enrichment.py reads cleaned JSONL, calls enrich_place() via Gemini, writes enriched_*.jsonl with quality scores. |
 
 ---
 
