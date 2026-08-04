@@ -407,8 +407,11 @@ if __name__ == "__main__":
         os.path.dirname(os.path.abspath(__file__))
     )
     _PROJECT_ROOT = os.path.dirname(_SCRIPTS_DIR)
-    _RUNNER_DIR = os.path.join(_SCRIPTS_DIR, "runner")
-    for p in (_SCRIPTS_DIR, _RUNNER_DIR):
+    _SCRIPTS_DIR = os.path.join(_PROJECT_ROOT, "scripts")
+    _RUNNER_DIR = os.path.join(_PROJECT_ROOT, "runner")
+
+    # _PROJECT_ROOT on path → makes `runner` importable as a package
+    for p in (_PROJECT_ROOT, _SCRIPTS_DIR):
         if p not in sys.path:
             sys.path.insert(0, p)
 

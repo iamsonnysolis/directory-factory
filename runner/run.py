@@ -25,10 +25,13 @@ import sqlite3
 import subprocess
 import sys
 
-# All script paths are relative to the project root (parent of scripts/).
+# All script paths are relative to the project root (parent of runner/).
 # We resolve them dynamically so the runner works from any CWD.
+# __file__ = directory-factory/runner/run.py
+#   dirname(1) = runner/
+#   dirname(2) = directory-factory  ← _PROJECT_ROOT
 _PROJECT_ROOT = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.path.dirname(os.path.abspath(__file__))
 )
 
 SCRIPT_MAP = {

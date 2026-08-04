@@ -17,14 +17,17 @@ import sys
 
 # ─── Path setup ───────────────────────────────────────────────────────────────
 # The collection engine uses flat imports, so scripts/collection/ must be on
-# sys.path. We also need scripts/ (parent) for runner imports.
+# sys.path. The runner/ package lives at the project root level.
 _PROJECT_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
-_COLLECTION_DIR = os.path.join(_PROJECT_ROOT, "scripts", "collection")
-_RUNNER_DIR = os.path.join(_PROJECT_ROOT, "scripts", "runner")
+_SCRIPTS_DIR = os.path.join(_PROJECT_ROOT, "scripts")
+_COLLECTION_DIR = os.path.join(_SCRIPTS_DIR, "collection")
 
-for p in (_COLLECTION_DIR, _RUNNER_DIR, os.path.dirname(_RUNNER_DIR)):
+# _PROJECT_ROOT on path → makes `runner` importable as a package
+# _SCRIPTS_DIR on path → makes flat imports (from config import) work
+# _COLLECTION_DIR on path → direct collection engine imports
+for p in (_PROJECT_ROOT, _SCRIPTS_DIR, _COLLECTION_DIR):
     if p not in sys.path:
         sys.path.insert(0, p)
 

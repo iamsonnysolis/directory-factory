@@ -889,13 +889,14 @@ if __name__ == "__main__":
         os.path.dirname(os.path.abspath(__file__))
     )
     _PROJECT_ROOT = os.path.dirname(_SCRIPTS_DIR)
-    _RUNNER_DIR = os.path.join(_SCRIPTS_DIR, "runner")
+    _SCRIPTS_DIR = os.path.join(_PROJECT_ROOT, "scripts")
+    _RUNNER_DIR = os.path.join(_PROJECT_ROOT, "runner")
     _COLLECTION_DIR = os.path.join(_SCRIPTS_DIR, "collection")
 
-    # scripts/ on path → makes `runner` importable as a package
-    # runner/ on path → makes `contract` importable directly
-    # collection/ on path → makes flat imports (from config import) work
-    for p in (_SCRIPTS_DIR, _RUNNER_DIR, _COLLECTION_DIR):
+    # _PROJECT_ROOT on path → makes `runner` importable as a package
+    # _SCRIPTS_DIR on path → makes flat imports (from config import) work
+    # _COLLECTION_DIR on path → for direct collection engine imports
+    for p in (_PROJECT_ROOT, _SCRIPTS_DIR, _COLLECTION_DIR):
         if p not in sys.path:
             sys.path.insert(0, p)
 
