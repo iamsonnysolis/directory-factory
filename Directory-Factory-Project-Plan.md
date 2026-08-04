@@ -194,6 +194,7 @@ standardized runner (Phase 3).
   ```
 
 ### Steps
+
 1. **Verify collection engine imports resolve standalone:**
    ```bash
    cd scripts/collection
@@ -204,10 +205,66 @@ standardized runner (Phase 3).
    python3 -c "import asyncio; from database import init_db; asyncio.run(init_db())"
    sqlite3 data/collector.db ".tables"  # should show: jobs, log, place, project, search_term
    ```
-3. **Verify `collect_project()` is callable via the Phase 3 runner:**
+3. **Create a test project (required before collection — API layer not yet built in Phase 1):**
    ```bash
    cd /home/shanon/web-dev/directory-factory
-   python runner/run.py collection.collect --project-id=1
+   source .venv/bin/activate
+   python3 -c "
+   import asyncio, json, sys
+   sys.path.insert(0, 'scripts/collection')
+   from database import AsyncSessionLocal, init_db
+   from models import Project, SearchTerm, Job
+   from slugify import slugify
+
+   async def create_test_project():
+       await init_db()
+       async with AsyncSessionLocal() as db:
+           project = Project(
+               name='Test Directory',
+               slug=slugify('Test Directory'),
+               country='Australia',  # or your target country
+               search_step_km=0.5,
+               field_tier=1,
+               status='running'  # must be 'running' for collect_project() to process it
+           )
+           db.add(project)
+           await db.commit()
+           await db.refresh(project)
+           for term in ['your search term here']:  # e.g. 'mobile dog groomer'
+               db.add(SearchTerm(project_id=project.id, term=term))
+           await db.commit()
+           return {'project_id': project.id, 'name': project.name, 'slug': project.slug, 'status': project.status}
+
+   print(json.dumps(asyncio.run(create_test_project())))
+   "
+   # Note the project_id from the output — you'll use it in the next step
+   ```
+   **Note:** In the final system, project creation will be done via the dashboard API (Phase 4). This step is the Phase 1 workaround until the API layer exists.
+   
+   After testing, clean up the test project:
+   ```bash
+   python3 -c "
+   import asyncio, sys
+   sys.path.insert(0, 'scripts/collection')
+   from database import AsyncSessionLocal
+   from models import Project, SearchTerm, Job, Place, Log
+   from sqlalchemy import delete
+
+   async def cleanup():
+       async with AsyncSessionLocal() as db:
+           for model in [Place, Job, SearchTerm, Log, Project]:
+               await db.execute(delete(model))
+           await db.commit()
+   asyncio.run(cleanup())
+   print('Cleaned up test data')
+   "
+   sqlite3 data/collector.db "DELETE FROM projects WHERE name = 'Test Directory';"
+   rm -f data/collector.db runs.db data/cleaned_*.jsonl data/enriched_*.jsonl
+   ```
+4. **Verify `collect_project()` runs via the Phase 3 runner:**
+   ```bash
+   cd /home/shanon/web-dev/directory-factory
+   python runner/run.py collection.collect --project-id=<your_project_id_from_step_3>
    # Creates a run row in runs.db, attempts collection (may 403 if key invalid — that's OK, code path works)
    sqlite3 runs.db "SELECT * FROM runs ORDER BY id DESC LIMIT 1;"
    ```
@@ -215,6 +272,7 @@ standardized runner (Phase 3).
 ### Expected Results
 - All three imports resolve with no errors
 - `init_db()` creates tables: `projects`, `jobs`, `places`, `search_terms`, `logs`
+- Test project is created successfully with `status="running"`
 - `collect_project()` runs (a 403 from Google Places means the key is invalid — not a code issue)
 - Run is logged to `runs.db` with stdout/stderr columns populated
 
