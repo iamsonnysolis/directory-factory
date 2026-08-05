@@ -337,7 +337,7 @@ scripts/cleaning_enrichment/
    ```bash
    cd scripts/cleaning_enrichment
    python3 -c "
-   from cleaning import clean_place, slugify, parse_opening_hours, derive_features, dedupe_records
+   from cleaning import clean_place, clean_text, derive_features, derive_notes
    print('Library imports OK')
    raw = {'displayName': {'text': 'Test Cafe'}, 'formattedAddress': 'Sydney NSW 2000'}
    cleaned = clean_place(raw)
