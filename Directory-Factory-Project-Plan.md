@@ -200,15 +200,20 @@ standardized runner (Phase 3).
 
 1. **Verify collection engine imports resolve standalone:**
    ```bash
+   cd /home/shanon/web-dev/directory-factory
+   source .venv/bin/activate
    cd scripts/collection
    python3 -c "from config import settings; from database import init_db; from services.collector import collect_project; print('Imports OK')"
    ```
 2. **Verify `init_db()` creates all 5 tables:**
    ```bash
+   cd /home/shanon/web-dev/directory-factory
+   source .venv/bin/activate
    mkdir -p data  # ensure the data/ dir exists for the SQLite DB
-   python3 -c "import asyncio; from database import init_db; asyncio.run(init_db())"
+   PYTHONPATH=scripts/collection python3 -c "import asyncio; from database import init_db; asyncio.run(init_db())"
    sqlite3 data/collector.db ".tables"  # should show: jobs, log, place, project, search_term
    ```
+   **Note:** The DB file is created at `data/collector.db` relative to your **current working directory** (CWD). If you get "no such table" errors from `sqlite3`, ensure you're running from the project root (`/home/shanon/web-dev/directory-factory`).
 3. **Create a test project (required before collection — API layer not yet built in Phase 1):**
    ```bash
    cd /home/shanon/web-dev/directory-factory
