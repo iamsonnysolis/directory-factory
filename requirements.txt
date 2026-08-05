@@ -10,7 +10,7 @@ phonenumbers>=8.13.0
 
 # Phase 2: Cleaning + enrichment (ported from toiletsnearme-data)
 python-slugify>=8.0.0
-google-generativeai>=0.8.0
+google-genai>=1.0.0
 
 # Phase 3: Standardized script runner
 # (stdlib only — argparse, sqlite3, subprocess, json, os, sys)

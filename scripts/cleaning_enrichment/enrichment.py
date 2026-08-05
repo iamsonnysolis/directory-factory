@@ -29,7 +29,7 @@ import os
 import re
 from typing import Any
 
-import google.generativeai as genai
+import google.genai as genai
 
 logger = logging.getLogger(__name__)
 
@@ -129,20 +129,21 @@ async def call_gemini(prompt: str, model_name: str = "gemini-2.5-flash-lite") ->
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY environment variable is not set")
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name=model_name,
-        generation_config={
-            "response_mime_type": "application/json",
-            "temperature": 0.85,
-            "max_output_tokens": 2048,
-        },
-    )
+    client = genai.Client(api_key=api_key)
+    config = {
+        "response_mime_type": "application/json",
+        "temperature": 0.85,
+        "max_output_tokens": 2048,
+    }
 
     last_error: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            result = await model.generate_content_async(prompt)
+            result = await client.aio.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=config,
+            )
             raw_text = result.text.strip()
             # Strip markdown code fences (port from generate-eeat.js)
             json_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)

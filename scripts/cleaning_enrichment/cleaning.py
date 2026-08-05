@@ -902,8 +902,17 @@ if __name__ == "__main__":
 
     from runner.contract import script_main
 
-    _DATA_DIR = os.path.join(_SCRIPTS_DIR, "collection", "data")
-    _COLLECTOR_DB = os.path.join(_DATA_DIR, "collector.db")
+    # Resolve collector DB path — respects DATABASE_URL env var (same pattern
+    # as scripts/collection/database.py) so cleaning.py and collection engine
+    # always read from the same DB file, regardless of which script invoked.
+    db_url = os.getenv("DATABASE_URL", "sqlite:///./data/collector.db")
+    if db_url.startswith("sqlite:///"):
+        _COLLECTOR_DB = db_url.replace("sqlite:///", "")
+        if not os.path.isabs(_COLLECTOR_DB):
+            _COLLECTOR_DB = os.path.join(os.getcwd(), _COLLECTOR_DB)
+    else:
+        _COLLECTOR_DB = os.path.join(_SCRIPTS_DIR, "collection", "data", "collector.db")
+    _DATA_DIR = os.path.join(_PROJECT_ROOT, "data")
 
     @script_main
     def main(project_id: int, params: dict) -> dict:
