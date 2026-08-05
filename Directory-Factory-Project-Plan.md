@@ -183,9 +183,12 @@ standardized runner (Phase 3).
 
 ### Prerequisites
 - Create a `.env` file with at minimum `GOOGLE_PLACES_API_KEY=***  (the collection engine can't initialize `Settings` without it).
+  Also create a `.env` file for the project-root-level runner:
   ```bash
   cp .env.example .env
   # Edit .env, paste a real Google Places API key
+  # Create the data/ directory that the SQLite DB lives in:
+  mkdir -p data
   ```
 - Ensure the venv has the deps installed:
   ```bash
@@ -202,6 +205,7 @@ standardized runner (Phase 3).
    ```
 2. **Verify `init_db()` creates all 5 tables:**
    ```bash
+   mkdir -p data  # ensure the data/ dir exists for the SQLite DB
    python3 -c "import asyncio; from database import init_db; asyncio.run(init_db())"
    sqlite3 data/collector.db ".tables"  # should show: jobs, log, place, project, search_term
    ```
@@ -210,13 +214,14 @@ standardized runner (Phase 3).
    cd /home/shanon/web-dev/directory-factory
    source .venv/bin/activate
    python3 -c "
-   import asyncio, json, sys
+   import asyncio, json, sys, os
    sys.path.insert(0, 'scripts/collection')
    from database import AsyncSessionLocal, init_db
    from models import Project, SearchTerm, Job
    from slugify import slugify
 
    async def create_test_project():
+       os.makedirs('data', exist_ok=True)  # ensure data/ dir exists for SQLite
        await init_db()
        async with AsyncSessionLocal() as db:
            project = Project(
@@ -261,6 +266,8 @@ standardized runner (Phase 3).
    sqlite3 data/collector.db "DELETE FROM projects WHERE name = 'Test Directory';"
    rm -f data/collector.db runs.db data/cleaned_*.jsonl data/enriched_*.jsonl
    ```
+   **Important:** If you get `unable to open database file` errors, ensure the `data/` directory
+   exists: `mkdir -p data` (the SQLite DB path is relative to CWD)
 4. **Verify `collect_project()` runs via the Phase 3 runner:**
    ```bash
    cd /home/shanon/web-dev/directory-factory
