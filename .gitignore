@@ -9,7 +9,5 @@ __pycache__/
 venv/
 *.log
 runs.db
-.data/
 data/
-scripts/collection/data/*.db
 .DS_Store

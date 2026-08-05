@@ -213,7 +213,7 @@ standardized runner (Phase 3).
    PYTHONPATH=scripts/collection python3 -c "import asyncio; from database import init_db; asyncio.run(init_db())"
    sqlite3 data/collector.db ".tables"  # should show: jobs, log, place, project, search_term
    ```
-   **Note:** The DB file is created at `data/collector.db` relative to your **current working directory** (CWD). If you get "no such table" errors from `sqlite3`, ensure you're running from the project root (`/home/shanon/web-dev/directory-factory`).
+   **Note:** The DB lives at `data/collector.db` at the **project root** (`/home/shanon/web-dev/directory-factory/data/collector.db`). The `config.py` `DATABASE_URL` is `sqlite:///./data/collector.db` (relative to CWD), so always run commands from the project root. The old `scripts/collection/data/collector.db` was removed — all collection runs use the single project-root DB. If you get "no such table" errors from `sqlite3`, ensure you're running from the project root and have run `init_db()` first.
 3. **Create a test project (required before collection — API layer not yet built in Phase 1):**
    ```bash
    cd /home/shanon/web-dev/directory-factory
