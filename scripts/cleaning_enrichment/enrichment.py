@@ -33,6 +33,20 @@ import google.genai as genai
 
 logger = logging.getLogger(__name__)
 
+
+def _slugify(text: str | None) -> str:
+    """Slugify wrapper — delegates to python-slugify if available, else uses cleaning.slugify."""
+    if text is None or not text.strip():
+        return ""
+    try:
+        from slugify import slugify as _py_slugify
+        return _py_slugify(text, lowercase=True, separator="-")
+    except ImportError:
+        # Fallback: import from cleaning module
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from cleaning import slugify as _cleaning_slugify
+        return _cleaning_slugify(text)
+
 # ─── Constants (ported from generate-eeat.js) ────────────────────────────────────
 
 MAX_RETRIES = 3
@@ -394,24 +408,146 @@ def compute_quality_score(cleaned_record: dict, enriched_record: dict | None = N
     return min(round(score), 100)
 
 
-# ─── Script entry point (Phase 3.6 / 2.7) ─────────────────────────────────────
-# Allows the file to be invoked directly by runner/run.py via @script_main.
-# Reads cleaned records from data/cleaned_<project_id>.jsonl, enriches each
-# with AI content and quality score, writes to data/enriched_<project_id>.jsonl.
+# ─── Script entry point ───────────────────────────────────────────────────────
+# Invoked by runner/run.py via @script_main (Phase 3.7 / 2.7).
+# Reads per-table cleaned data from data/<project_id>/cleaned/*.jsonl,
+# enriches businesses with AI content, writes per-table enriched data
+# to data/<project_id>/enriched/*.jsonl plus content.jsonl with AI-generated
+# geography-level content.
+
+# Content type sets — align with Data-Model-Spec.md §Content Model
+GEO_CONTENT_TYPES = ["about", "local_context", "faq", "tips", "meta_title",
+                      "meta_description", "seo_keywords"]
+BUSINESS_CONTENT_TYPES = ["about", "meta_title", "meta_description",
+                           "seo_keywords", "services", "specialties"]
+
+
+def _build_geo_prompt(entity_type: str, entity_name: str,
+                      state_code: str, business_count: int,
+                      feature_counts: dict, content_types: list[str]) -> str:
+    """Build a Gemini prompt for geography-level EEAT content.
+
+    Ported from ``generate-eeat.js`` ``buildStatePrompt`` /
+    ``buildRegionPrompt`` / ``buildSuburbPrompt``, generalized to be
+    directory-agnostic (not toilet-specific) and parameterized by
+    ``content_types`` (5–7 types per the Data-Model-Spec.md).
+
+    The original prompts were hard-coded for 6 content types per level.
+    Here we generate the same set but dynamically, using ``{{placeholder}}``
+    tokens resolved at Astro render time (not baked in at enrichment time).
+    """
+    feature_lines = "\n".join(
+        f"  - {k}: {v}" for k, v in sorted(feature_counts.items())
+    ) or "  (no feature data)"
+    types_str = ", ".join(content_types)
+    return f"""You are a local SEO content writer for a directory of local businesses.
+
+Write content for the {entity_type.upper()} level: {entity_name} ({state_code}).
+
+BUSINESS COUNT: {business_count}
+FEATURE COUNTS (from cleaned data):
+{feature_lines}
+
+CONTENT TO WRITE (return ONLY JSON):
+For each of these content types, write a concise, helpful, SEO-optimized piece:
+{types_str}
+
+RULES:
+- Australian English spelling
+- Use {{business_count}} as a placeholder token — do NOT resolve the number
+- Keep content generic enough to work for any local business directory
+- meta_title: 50-60 chars, include the entity name
+- meta_description: 150-160 chars
+- seo_keywords: comma-separated string of 8-12 keywords
+- faq: JSON array of {{question, answer}} pairs (3-5 items)
+- tips: JSON array of 3-5 short tips
+- about: 2-3 paragraphs about the area's business landscape
+- local_context: 1-2 paragraphs about the area's character, demographics, notable attractions
+
+Return ONLY a JSON object with keys matching the content type names:
+{json.dumps({t: "string or structured value" for t in content_types})}"""
+
+
+def _build_geo_content(entity_type: str, entity_name: str,
+                       state_code: str, business_count: int,
+                       feature_counts: dict, content_types: list[str]) -> list[dict]:
+    """Generate geography-level EEAT content and return as content rows.
+
+    Uses Gemini to generate real AI content (not static templates),
+    with {{placeholder}} tokens left unresolved for Astro render-time.
+    Returns a list of content-row dicts ready for content.jsonl.
+    """
+    prompt = _build_geo_prompt(
+        entity_type, entity_name, state_code, business_count,
+        feature_counts, content_types
+    )
+    try:
+        result = asyncio.run(call_gemini(prompt))
+    except Exception as e:
+        logger.warning(f"Geo content generation failed for {entity_type} '{entity_name}': {e}")
+        result = {}
+
+    now = _utcnow_iso()
+    rows = []
+    entity_id = f"{entity_type}:{_slugify(entity_name) or entity_name}"
+    for ct in content_types:
+        body = result.get(ct)
+        if not body:
+            continue
+        # Normalize: arrays stay arrays, strings stay strings
+        if isinstance(body, list):
+            body_str = json.dumps(body, ensure_ascii=False)
+            wc = len(body_str.split())  # word count is the JSON string
+        else:
+            body_str = str(body)
+            wc = len(body_str.split())
+        rows.append({
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "content_type": ct,
+            "body": body_str,
+            "word_count": wc,
+            "ai_model": "gemini-2.5-flash-lite",
+            "generated_at": now,
+        })
+    return rows
+
+
+def _write_jsonl(path: str, records: list) -> None:
+    """Write records as JSONL (one JSON object per line)."""
+    with open(path, "w") as f:
+        for rec in records:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def _read_jsonl(path: str) -> list[dict]:
+    """Read JSONL file, return list of dicts."""
+    records = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    return records
+
+
+def _compute_geo_feature_counts(businesses: list[dict]) -> dict:
+    """Compute feature_counts from a list of enriched business records."""
+    counts = {}
+    for biz in businesses:
+        for fk in biz.get("feature_keys", []):
+            counts[fk] = counts.get(fk, 0) + 1
+    return counts
+
 
 if __name__ == "__main__":
     # __file__ = directory-factory/scripts/cleaning_enrichment/enrichment.py
-    #   dirname(1) = scripts/cleaning_enrichment
-    #   dirname(2) = scripts  ← _SCRIPTS_DIR
-    #   dirname(3) = directory-factory  ← _PROJECT_ROOT
     _SCRIPTS_DIR = os.path.dirname(
         os.path.dirname(os.path.abspath(__file__))
     )
     _PROJECT_ROOT = os.path.dirname(_SCRIPTS_DIR)
     _SCRIPTS_DIR = os.path.join(_PROJECT_ROOT, "scripts")
-    _RUNNER_DIR = os.path.join(_PROJECT_ROOT, "runner")
 
-    # _PROJECT_ROOT on path → makes `runner` importable as a package
     for p in (_PROJECT_ROOT, _SCRIPTS_DIR):
         if p not in sys.path:
             sys.path.insert(0, p)
@@ -424,76 +560,201 @@ if __name__ == "__main__":
     def main(project_id: int, params: dict) -> dict:
         """Enrich cleaned place records with AI content and quality scores.
 
-        Reads ``data/cleaned_<project_id>.jsonl``, calls ``enrich_place()``
-        on each record (via Gemini), computes ``compute_quality_score()``,
-        and writes results to ``data/enriched_<project_id>.jsonl``.
+        Reads per-table cleaned data from ``data/<project_id>/cleaned/*.jsonl``,
+        enriches businesses, generates geography-level EEAT content, and
+        writes to ``data/<project_id>/enriched/*.jsonl``.
 
         Args:
             project_id: The collection project ID.
             params: Optional parameters:
                 - ``max_places``: Limit number of places to enrich (for testing).
-                - ``skip_ai``: If True, skip Gemini call, just compute scores.
+                - ``skip_ai``: If True, skip Gemini calls, use fallback content.
                 - ``model``: Gemini model name to use.
+                - ``skip_geo_content``: If True, skip geography-level content generation.
         """
-        input_path = os.path.join(_DATA_DIR, f"cleaned_{project_id}.jsonl")
-        if not os.path.isfile(input_path):
+        from runner.contract import script_main
+
+        cleaned_dir = os.path.join(_DATA_DIR, str(project_id), "cleaned")
+        biz_path = os.path.join(cleaned_dir, "businesses.jsonl")
+        if not os.path.isfile(biz_path):
             raise FileNotFoundError(
-                f"Cleaned data not found at {input_path}. "
+                f"Cleaned businesses not found at {biz_path}. "
                 "Run cleaning.clean first."
             )
 
         max_places = params.get("max_places")
         skip_ai = params.get("skip_ai", False)
         model_name = params.get("model", "gemini-2.5-flash-lite")
+        skip_geo_content = params.get("skip_geo_content", False)
 
-        records = []
-        with open(input_path) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    records.append(json.loads(line))
+        # Load cleaned data
+        businesses = _read_jsonl(biz_path)
+        states = _read_jsonl(os.path.join(cleaned_dir, "states.jsonl")) if os.path.isfile(os.path.join(cleaned_dir, "states.jsonl")) else []
+        regions = _read_jsonl(os.path.join(cleaned_dir, "regions.jsonl")) if os.path.isfile(os.path.join(cleaned_dir, "regions.jsonl")) else []
+        suburbs = _read_jsonl(os.path.join(cleaned_dir, "suburbs.jsonl")) if os.path.isfile(os.path.join(cleaned_dir, "suburbs.jsonl")) else []
 
         if max_places:
-            records = records[:max_places]
+            businesses = businesses[:max_places]
 
-        enriched_records = []
-        for record in records:
-            # Compute quality score (doesn't need AI)
-            score = compute_quality_score(record, None)
-            record["quality_score"] = score
+        # ── Business-level enrichment ──────────────────────────────────────────
+        enriched_businesses = []
+        feature_rows = []
+        hours_rows = []
+        services_rows = []
+        content_rows = []  # business-level content → content.jsonl
 
-            # Generate AI content (needs Gemini API key)
+        for biz in businesses:
+            # Compute quality score
+            score = compute_quality_score(biz, None)
+            biz["quality_score"] = score
+
+            # AI content
             if skip_ai:
-                record["ai_generated"] = False
+                biz["ai_generated"] = False
             else:
                 try:
-                    content = asyncio.run(enrich_place(record))
-                    record["enrichment"] = content
-                    record["ai_generated"] = True
+                    content = asyncio.run(enrich_place(biz))
+                    biz["enrichment"] = content
+                    biz["ai_generated"] = True
                 except Exception as e:
-                    record["enrichment_error"] = str(e)
-                    record["ai_generated"] = False
+                    biz["enrichment_error"] = str(e)
+                    biz["ai_generated"] = False
 
-            enriched_records.append(record)
+                # Write business content rows to content.jsonl later
+                if "enrichment" in biz:
+                    now = biz["enrichment"].get("generated_at", _utcnow_iso())
+                    entity_id = biz.get("place_id") or ""
+                    base_types = ["about", "meta_title", "meta_description",
+                                  "seo_keywords", "services", "specialties"]
+                    for ct in base_types:
+                        val = biz["enrichment"].get(ct)
+                        if not val:
+                            continue
+                        if isinstance(val, list):
+                            body_str = json.dumps(val, ensure_ascii=False)
+                        else:
+                            body_str = str(val)
+                        content_rows.append({
+                            "entity_type": "business",
+                            "entity_id": entity_id,
+                            "content_type": ct,
+                            "body": body_str,
+                            "word_count": len(body_str.split()) if isinstance(val, str) else len(val),
+                            "ai_model": "gemini-2.5-flash-lite",
+                            "generated_at": now,
+                        })
 
-        # Write enriched records
-        os.makedirs(_DATA_DIR, exist_ok=True)
-        output_path = os.path.join(_DATA_DIR, f"enriched_{project_id}.jsonl")
-        with open(output_path, "w") as f:
-            for record in enriched_records:
-                f.write(json.dumps(record) + "\n")
+            # Extract feature rows
+            for fk in biz.get("feature_keys", []):
+                feature_rows.append({
+                    "place_id": biz.get("place_id"),
+                    "feature_key": fk,
+                })
 
-        ai_count = sum(1 for r in enriched_records if r.get("ai_generated"))
-        error_count = sum(1 for r in enriched_records if "enrichment_error" in r)
+            # Extract hours rows
+            for hr in biz.get("hours_rows", []):
+                hours_rows.append({
+                    "place_id": biz.get("place_id"),
+                    **{k: v for k, v in hr.items() if k != "facility_id"},
+                })
+
+            # Extract services rows (from enrichment if available)
+            if biz.get("enrichment") and "services" in biz["enrichment"]:
+                for svc in biz["enrichment"]["services"]:
+                    services_rows.append({
+                        "place_id": biz.get("place_id"),
+                        "service_name": svc,
+                    })
+
+            enriched_businesses.append(biz)
+
+        # ── Geography-level content generation ─────────────────────────────────
+        # Build a lookup: businesses grouped by state / region / suburb slug
+        if not skip_geo_content:
+            # Group businesses for each geography level
+            biz_by_state = {}
+            biz_by_region = {}
+            biz_by_suburb = {}
+            for biz in enriched_businesses:
+                sc = biz.get("state_code", "")
+                biz_by_state.setdefault(sc, []).append(biz)
+
+                rslug = biz.get("region_slug")
+                if rslug:
+                    biz_by_region.setdefault((rslug, sc), []).append(biz)
+                sslug = biz.get("suburb_slug")
+                if sslug:
+                    biz_by_suburb.setdefault((sslug, sc), []).append(biz)
+
+            # Generate state-level content
+            for st in states:
+                code = st.get("code", "")
+                bcount = st.get("business_count") or len(biz_by_state.get(code, []))
+                fcounts = _compute_geo_feature_counts(biz_by_state.get(code, []))
+                # Map state_code (e.g. "QLD") to state_long for the prompt name
+                name = st.get("name", code)
+                content_rows.extend(_build_geo_content(
+                    "state", name, code, bcount, fcounts,
+                    GEO_CONTENT_TYPES,
+                ))
+
+            # Generate region-level content
+            for reg in regions:
+                sc = reg.get("state_code", "")
+                rkey = (reg.get("slug", ""), sc)
+                bcount = reg.get("business_count") or len(biz_by_region.get(rkey, []))
+                fcounts = _compute_geo_feature_counts(biz_by_region.get(rkey, []))
+                name = reg.get("name", reg.get("slug", ""))
+                content_rows.extend(_build_geo_content(
+                    "region", name, sc, bcount, fcounts,
+                    GEO_CONTENT_TYPES,
+                ))
+
+            # Generate suburb-level content
+            for sub in suburbs:
+                sc = sub.get("state_code", "")
+                skey = (sub.get("slug", ""), sc)
+                bcount = sub.get("business_count") or len(biz_by_suburb.get(skey, []))
+                fcounts = _compute_geo_feature_counts(biz_by_suburb.get(skey, []))
+                name = sub.get("name", sub.get("slug", ""))
+                content_rows.extend(_build_geo_content(
+                    "suburb", name, sc, bcount, fcounts,
+                    GEO_CONTENT_TYPES,
+                ))
+
+        # ── Write all enriched data ────────────────────────────────────────────
+        enriched_dir = os.path.join(_DATA_DIR, str(project_id), "enriched")
+        os.makedirs(enriched_dir, exist_ok=True)
+
+        _write_jsonl(os.path.join(enriched_dir, "businesses.jsonl"), enriched_businesses)
+        _write_jsonl(os.path.join(enriched_dir, "states.jsonl"), states)
+        _write_jsonl(os.path.join(enriched_dir, "regions.jsonl"), regions)
+        _write_jsonl(os.path.join(enriched_dir, "suburbs.jsonl"), suburbs)
+        _write_jsonl(os.path.join(enriched_dir, "content.jsonl"), content_rows)
+        _write_jsonl(os.path.join(enriched_dir, "business_features.jsonl"), feature_rows)
+        _write_jsonl(os.path.join(enriched_dir, "business_hours.jsonl"), hours_rows)
+        _write_jsonl(os.path.join(enriched_dir, "business_services.jsonl"), services_rows)
+
+        ai_count = sum(1 for r in enriched_businesses if r.get("ai_generated"))
+        error_count = sum(1 for r in enriched_businesses if "enrichment_error" in r)
 
         return {
-            "summary": f"Enriched {len(enriched_records)} places for project {project_id} "
-                       f"({ai_count} AI-generated, {error_count} AI errors)",
+            "summary": f"Enriched {len(enriched_businesses)} places for project {project_id} "
+                       f"({ai_count} AI-generated, {error_count} AI errors). "
+                       f"Generated {len(content_rows)} content rows across "
+                       f"{len(states)} states, {len(regions)} regions, {len(suburbs)} suburbs.",
             "counts": {
-                "places": len(enriched_records),
+                "businesses": len(enriched_businesses),
                 "ai_generated": ai_count,
                 "ai_errors": error_count,
-                "output_file": f"data/enriched_{project_id}.jsonl",
+                "states": len(states),
+                "regions": len(regions),
+                "suburbs": len(suburbs),
+                "content_rows": len(content_rows),
+                "feature_rows": len(feature_rows),
+                "hours_rows": len(hours_rows),
+                "services_rows": len(services_rows),
+                "output_dir": f"data/{project_id}/enriched/",
             },
         }
 

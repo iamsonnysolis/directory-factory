@@ -34,9 +34,12 @@ The script:
 import json
 import os
 import sys
+import logging
 from datetime import datetime, timezone
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 # ─── Path setup (Phase 3 pattern) ──────────────────────────────────────────────
 # __file__ = directory-factory/scripts/deploy/d1_upload.py
@@ -535,20 +538,29 @@ def upload_project(project_id: int, params: dict) -> dict:
             "CLOUDFLARE_API_TOKEN env var."
         )
 
-    # ── Read enriched JSONL ──────────────────────────────────────────────────
-    input_path = os.path.join(_DATA_DIR, f"enriched_{project_id}.jsonl")
-    if not os.path.isfile(input_path):
+    # ── Read per-table enriched JSONL ─────────────────────────────────────────
+    enriched_dir = os.path.join(_DATA_DIR, str(project_id), "enriched")
+    biz_path = os.path.join(enriched_dir, "businesses.jsonl")
+    if not os.path.isfile(biz_path):
         raise FileNotFoundError(
-            f"Enriched data not found at {input_path}. "
+            f"Enriched data not found at {enriched_dir}. "
             f"Run 'enrichment.enrich --project-id={project_id}' first."
         )
 
-    records = []
-    with open(input_path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
+    def _read_jsonl(path: str) -> list[dict]:
+        records = []
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+        return records
+
+    records = _read_jsonl(biz_path)
+    states = _read_jsonl(os.path.join(enriched_dir, "states.jsonl"))
+    regions = _read_jsonl(os.path.join(enriched_dir, "regions.jsonl"))
+    suburbs = _read_jsonl(os.path.join(enriched_dir, "suburbs.jsonl"))
+    content_rows = _read_jsonl(os.path.join(enriched_dir, "content.jsonl"))
 
     if not records:
         return {
@@ -564,197 +576,186 @@ def upload_project(project_id: int, params: dict) -> dict:
     content_statements = []      # content rows (content last)
     site_config_statements = []  # site_config rows
 
-    # 1. Schema DDL
-    all_statements.append(build_schema_sql())
-
     # 2. site_config
     site_config_statements = build_site_config_upserts(site_name, params)
     all_statements.extend(site_config_statements)
 
-    # Track unique geography entities to upsert
-    states_seen = {}
-    regions_seen = {}
-    suburbs_seen = {}
+    # 3. States — from states.jsonl (deduped, business_count pre-computed)
+    for st in states:
+        code = st.get("code")
+        if not code:
+            continue
+        name = st.get("name", code)
+        slug = st.get("slug", code.lower())
+        biz_count = st.get("business_count", 0)
+        now = datetime.now(timezone.utc).isoformat()
+        stmt = (
+            f"INSERT INTO states (code, name, slug, business_count, updated_at) "
+            f"VALUES ({sql_str(code)}, {sql_str(name)}, {sql_str(slug)}, {sql_str(biz_count)}, {sql_str(now)}) "
+            f"ON CONFLICT(code) DO UPDATE SET name=excluded.name, slug=excluded.slug, "
+            f"business_count=excluded.business_count, updated_at=excluded.updated_at"
+        )
+        all_statements.append(stmt)
 
-    # 3-5. States → Regions → Suburbs → Businesses
-    business_slugs = []
+    # 4. Regions — from regions.jsonl
+    for reg in regions:
+        slug = reg.get("slug")
+        state_code = reg.get("state_code")
+        if not slug or not state_code:
+            continue
+        name = reg.get("name", slug)
+        biz_count = reg.get("business_count", 0)
+        now = datetime.now(timezone.utc).isoformat()
+        stmt = (
+            f"INSERT INTO regions (slug, state_code, name, business_count, updated_at) "
+            f"VALUES ({sql_str(slug)}, {sql_str(state_code)}, {sql_str(name)}, {sql_str(biz_count)}, {sql_str(now)}) "
+            f"ON CONFLICT(slug, state_code) DO UPDATE SET name=excluded.name, "
+            f"business_count=excluded.business_count, updated_at=excluded.updated_at"
+        )
+        all_statements.append(stmt)
+
+    # 5. Suburbs — from suburbs.jsonl
+    for sub in suburbs:
+        slug = sub.get("slug")
+        state_code = sub.get("state_code")
+        if not slug or not state_code:
+            continue
+        name = sub.get("name", slug)
+        postcode = sub.get("postcode")
+        biz_count = sub.get("business_count", 0)
+        now = datetime.now(timezone.utc).isoformat()
+        stmt = (
+            f"INSERT INTO suburbs (slug, state_code, name, postcode, business_count, updated_at) "
+            f"VALUES ({sql_str(slug)}, {sql_str(state_code)}, {sql_str(name)}, {sql_str(postcode)}, {sql_str(biz_count)}, {sql_str(now)}) "
+            f"ON CONFLICT(slug, state_code) DO UPDATE SET name=excluded.name, "
+            f"postcode=excluded.postcode, business_count=excluded.business_count, "
+            f"updated_at=excluded.updated_at"
+        )
+        all_statements.append(stmt)
+
+    # 6. Businesses — region_slug/suburb_slug already on each record (from cleaning)
+    all_statements.append("; ".join(build_count_recompute_statements()))
     for record in records:
-        # States
-        state_stmt = build_state_upsert(record)
-        if state_stmt:
-            key = record.get("state_code")
-            if key and key not in states_seen:
-                states_seen[key] = True
-                all_statements.append(state_stmt)
-
-        # Regions
-        region_stmt = build_region_upsert(record)
-        if region_stmt:
-            key = (record.get("region_name"), record.get("state_code"))
-            if key not in regions_seen:
-                regions_seen[key] = True
-                all_statements.append(region_stmt)
-
-        # Suburbs
-        suburb_stmt = build_suburb_upsert(record)
-        if suburb_stmt:
-            key = (record.get("suburb_name"), record.get("state_code"))
-            if key not in suburbs_seen:
-                suburbs_seen[key] = True
-                all_statements.append(suburb_stmt)
-
-        # Businesses (needs suburb_id/region_id resolved — handled via subquery)
         all_statements.append(build_business_upsert_sql(record))
-        business_slugs.append(record.get("slug") or record.get("name", ""))
 
     # ── Dry run mode ──────────────────────────────────────────────────────
     if dry_run:
         total_features = sum(len(r.get("feature_keys", [])) for r in records)
         total_hours = sum(len(r.get("hours_rows", [])) for r in records)
-        total_services = sum(len(r.get("services", [])) + len(r.get("enrichment", {}).get("services", [])) for r in records)
-        total_content = len(records) * 6 + len(states_seen) * 5 + len(regions_seen) * 5 + len(suburbs_seen) * 5
+        total_services = 0
+        total_biz_content = 0
+        for r in content_rows:
+            if r.get("entity_type") == "business":
+                total_biz_content += 1
+        total_geo_content = sum(1 for r in content_rows if r.get("entity_type") != "business")
+        total_content = total_biz_content + total_geo_content
 
         return {
             "summary": (f"[DRY RUN] Would upload {len(records)} businesses to D1 "
-                        f"database {database_id} via 8-level pipeline: "
-                        f"schema → site_config → {len(states_seen)} states → "
-                        f"{len(regions_seen)} regions → {len(suburbs_seen)} suburbs → "
-                        f"businesses → features/hours/services → content + count recompute"),
+                        f"database {database_id} via flat per-table pipeline: "
+                        f"schema → site_config → {len(states)} states → "
+                        f"{len(regions)} regions → {len(suburbs)} suburbs → "
+                        f"businesses → features/hours/services → content ({len(content_rows)} rows) + count recompute"),
             "counts": {
                 "records": len(records),
-                "states": len(states_seen),
-                "regions": len(regions_seen),
-                "suburbs": len(suburbs_seen),
+                "states": len(states),
+                "regions": len(regions),
+                "suburbs": len(suburbs),
                 "businesses": len(records),
                 "features": total_features,
                 "hours": total_hours,
                 "services": total_services,
                 "content": total_content,
+                "content_business": total_biz_content,
+                "content_geography": total_geo_content,
                 "dry_run": True,
                 "statements_batch1": len(all_statements),
             },
         }
 
-    # ── Execute Level 1-5: schema + site_config + states/regions/suburbs/businesses ─
-    all_statements.append("; ".join(build_count_recompute_statements()))
+    # ── Execute Level 1-5: schema + site_config + geography + businesses ──
     d1_execute(account_id, database_id,
                "; ".join(all_statements) + ";", api_token)
+    d1_execute(account_id, database_id,
+               "; ".join(build_count_recompute_statements()) + ";",
+               api_token)
 
-    # ── Phase 2: Look up business_ids by slug ─────────────────────────────
-    # Per Data-Model-Spec.md: resolve slug → id once, then join on integer ids
-    valid_slugs = [s for s in business_slugs if s]
-    if valid_slugs:
-        placeholders = ", ".join(sql_str(s) for s in valid_slugs)
-        lookup_result = d1_execute(account_id, database_id,
-            f"SELECT id, slug FROM businesses WHERE slug IN ({placeholders})",
+    # ── Resolve natural keys → real D1 ids ────────────────────────────────────
+    id_map = {}  # place_id (google_place_id) → business.id
+
+    # Get business ids
+    biz_place_ids = [r.get("place_id") for r in records if r.get("place_id")]
+    if biz_place_ids:
+        placeholders = ", ".join(sql_str(pid) for pid in biz_place_ids)
+        biz_lookup = d1_execute(account_id, database_id,
+            f"SELECT id, google_place_id FROM businesses WHERE google_place_id IN ({placeholders})",
             api_token)
-    else:
-        lookup_result = []
+        if isinstance(biz_lookup, list):
+            for row in biz_lookup:
+                if isinstance(row, dict):
+                    id_map[row["google_place_id"]] = row["id"]
 
-    id_map = {}
-    if valid_slugs and isinstance(lookup_result, list):
-        # Single SELECT: d1_execute normalizes to return just the row dicts list
-        for row in lookup_result:
-            if isinstance(row, dict) and "slug" in row:
-                id_map[row["slug"]] = row["id"]
-
-    # ── Phase 3: Build + execute feature/hour/service/content inserts ──────
-    dep_statements = []
-    content_count = 0
-
-    # Look up geography ids for content rows and business foreign keys
-    # Get region/suburb id maps
+    # Get geography ids (state code, region slug+state_code, suburb slug+state_code)
     geo_lookup = d1_execute(account_id, database_id,
+        "SELECT id, code FROM states; "
         "SELECT id, slug, state_code FROM regions; "
-        "SELECT id, slug, state_code FROM suburbs; "
-        "SELECT code, name FROM states;",
+        "SELECT id, slug, state_code FROM suburbs;",
         api_token)
 
-    region_map = {}
-    suburb_map = {}
-    state_map = {}
+    state_id_map = {}   # code → id
+    region_id_map = {}  # (slug, state_code) → id
+    suburb_id_map = {}  # (slug, state_code) → id
 
     if isinstance(geo_lookup, list):
         for idx, row_set in enumerate(geo_lookup):
             if isinstance(row_set, dict) and "results" in row_set:
-                for row in row_set["results"]:
-                    if idx == 0:  # regions
-                        region_map[(row["slug"], row["state_code"])] = row["id"]
-                    elif idx == 1:  # suburbs
-                        suburb_map[(row["slug"], row["state_code"])] = row["id"]
-                    elif idx == 2:  # states
-                        state_map[row["code"]] = row["name"]
+                results = row_set["results"]
+            elif isinstance(row_set, list):
+                results = row_set
+            else:
+                continue
+            for row in results:
+                if not isinstance(row, dict):
+                    continue
+                if idx == 0:  # states
+                    state_id_map[row["code"]] = row["id"]
+                elif idx == 1:  # regions
+                    region_id_map[(row["slug"], row["state_code"])] = row["id"]
+                elif idx == 2:  # suburbs
+                    suburb_id_map[(row["slug"], row["state_code"])] = row["id"]
 
-    # Get updated business_count values for content placeholders
-    count_lookup = d1_execute(account_id, database_id,
-        "SELECT state_code, SUM(business_count) as bc FROM states GROUP BY state_code;"
-        "SELECT state_code, SUM(business_count) as bc FROM regions GROUP BY state_code;"
-        "SELECT state_code, SUM(business_count) as bc FROM suburbs GROUP BY state_code;",
-        api_token)
-
-    state_biz_counts = {}
-    region_biz_counts = {}
-    suburb_biz_counts = {}
-
-    if isinstance(count_lookup, list):
-        for idx, row_set in enumerate(count_lookup):
-            if isinstance(row_set, dict) and "results" in row_set:
-                for row in row_set["results"]:
-                    if idx == 0: state_biz_counts[row["state_code"]] = row["bc"] or 0
-                    elif idx == 1: region_biz_counts[row["state_code"]] = row["bc"] or 0
-                    elif idx == 2: suburb_biz_counts[row["state_code"]] = row["bc"] or 0
-
-    # Resolve the subquery-based foreign keys in businesses table
-    # The businesses table uses subqueries to resolve region_id/suburb_id
-    # from region_name/suburb_name — but we already inserted the geography
-    # rows, so we need to update businesses with the resolved ids.
-    # This is a post-upsert step since the original UPSERT used subqueries.
-    update_biz_sql = (
-        "UPDATE businesses SET "
-        "suburb_id = (SELECT s.id FROM suburbs s WHERE s.slug = businesses.slug AND s.state_code = businesses.state_code), "
-        "region_id = (SELECT r.id FROM regions r WHERE r.slug = businesses.slug AND r.state_code = businesses.state_code) "
-        "WHERE suburb_id IS NULL OR region_id IS NULL"
-    )
-    # Actually, we need to resolve from the record's suburb_name/region_name, not slug.
-    # Let's do it per-record after looking up geography ids.
-    # The business UPSERT already set state_code from the record directly.
-    # For suburb_id and region_id, we need to look them up by name+state_code.
-    # We'll do this as a batch UPDATE after all geography is inserted.
-
-    # Build UPDATE statements for suburb_id and region_id on businesses
-    # (using the slug-based lookup pattern from the spec)
+    # ── Build FK resolution UPDATE statements for businesses ────────────────
     update_geo_sql_parts = []
     for record in records:
-        slug = record.get("slug") or record.get("name", "")
-        state_code = record.get("state_code")
-        region_name = record.get("region_name")
-        suburb_name = record.get("suburb_name")
-
-        if not slug or not state_code:
+        place_id = record.get("place_id")
+        if not place_id:
             continue
-
-        region_slug = region_name.lower().replace(" ", "-").replace("_", "-") if region_name else None
-        suburb_slug = suburb_name.lower().replace(" ", "-").replace("_", "-") if suburb_name else None
-
         updates = []
-        if region_slug:
-            updates.append(
-                f"region_id = (SELECT r.id FROM regions r WHERE r.slug = '{region_slug}' AND r.state_code = '{state_code}')"
-            )
-        if suburb_slug:
-            updates.append(
-                f"suburb_id = (SELECT s.id FROM suburbs s WHERE s.slug = '{suburb_slug}' AND s.state_code = '{state_code}')"
-            )
+
+        state_code = record.get("state_code")
+        if state_code and state_code in state_id_map:
+            updates.append(f"state_id = {state_id_map[state_code]}")
+
+        region_slug = record.get("region_slug")
+        if region_slug and state_code and (region_slug, state_code) in region_id_map:
+            updates.append(f"region_id = {region_id_map[(region_slug, state_code)]}")
+
+        suburb_slug = record.get("suburb_slug")
+        if suburb_slug and state_code and (suburb_slug, state_code) in suburb_id_map:
+            updates.append(f"suburb_id = {suburb_id_map[(suburb_slug, state_code)]}")
+
         if updates:
             update_geo_sql_parts.append(
                 f"UPDATE businesses SET {', '.join(updates)} "
-                f"WHERE slug = '{slug}' AND state_code = '{state_code}'"
+                f"WHERE google_place_id = {sql_str(place_id)}"
             )
 
-    # ── Build dependent inserts ─────────────────────────────────────────
+    # ── Build dependent inserts (features/hours/services) ───────────────────
+    dep_statements = []
+    content_count = 0
+
     for record in records:
-        slug = record.get("slug") or record.get("name", "")
-        biz_id = id_map.get(slug)
+        biz_id = id_map.get(record.get("place_id"))
         if biz_id is None:
             continue
 
@@ -768,70 +769,65 @@ def upload_project(project_id: int, params: dict) -> dict:
         if hours_rows:
             dep_statements.extend(build_hours_inserts(biz_id, hours_rows))
 
-        # Services (business_services — name only, pricing null per Data-Model-Spec.md)
+        # Services
         services = record.get("services", [])
         if not services:
             services = record.get("enrichment", {}).get("services", [])
         if services:
             dep_statements.extend(build_service_inserts(biz_id, services))
 
-        # Content — business-level (about, faq, tips, meta_title, meta_description, seo_keywords)
-        # Per Data-Model-Spec.md: enrichment writes content rows, not columns on businesses.
-        # The enrichment output uses these field names:
-        #   description → about, seo_meta_desc → meta_description,
-        #   seo_keywords → seo_keywords, services → business_services (handled above)
-        # We also support a pre-mapped `content` dict if it exists.
-        enrichment = record.get("enrichment", {})
-        content = record.get("content", {})
-        merged_content = {**enrichment, **content}
+    # ── Build content rows from content.jsonl ───────────────────────────────
+    content_statements = []
 
-        # Map enrichment field names to content_type values
-        content_mapping = {
-            "about": merged_content.get("about", merged_content.get("description")),
-            "faq": merged_content.get("faq"),
-            "tips": merged_content.get("tips"),
-            "meta_title": merged_content.get("meta_title"),
-            "meta_description": merged_content.get("meta_description",
-                                                    merged_content.get("seo_meta_desc")),
-            "seo_keywords": merged_content.get("seo_keywords"),
-        }
+    for crow in content_rows:
+        etype = crow.get("entity_type", "")
+        eid = crow.get("entity_id", "")
+        ctype = crow.get("content_type", "")
+        body = crow.get("body", "")
+        ai_model = crow.get("ai_model") or "gemini-2.5-flash-lite"
 
-        for ctype, body in content_mapping.items():
-            if body:
-                if ctype == "seo_keywords" and isinstance(body, list):
-                    body = ", ".join(body)
-                elif ctype in ("about", "faq", "tips") and isinstance(body, list):
-                    body = " ".join(str(b) for b in body)
-                content_statements.append(
-                    build_content_upsert("business", biz_id, ctype, str(body),
-                                        merged_content.get("ai_model", "gemini-2.5-flash-lite"))
-                )
-                content_count += 1
+        # Resolve natural key entity_id → real D1 id
+        real_id = None
+        if etype == "state":
+            # entity_id is the state code (e.g. "QLD")
+            real_id = state_id_map.get(eid)
+        elif etype == "region":
+            # entity_id format: "region:slug" per enrichment spec
+            if eid and ":" in eid:
+                _, slug = eid.split(":", 1)
+            else:
+                slug = eid
+            # Need state_code to look up — parse from the region record
+            real_id = None
+            for reg in regions:
+                if reg.get("slug") == slug:
+                    sc = reg.get("state_code", "")
+                    real_id = region_id_map.get((slug, sc))
+                    break
+        elif etype == "suburb":
+            # entity_id format: "suburb:slug"
+            if eid and ":" in eid:
+                _, slug = eid.split(":", 1)
+            else:
+                slug = eid
+            real_id = None
+            for sub in suburbs:
+                if sub.get("slug") == slug:
+                    sc = sub.get("state_code", "")
+                    real_id = suburb_id_map.get((slug, sc))
+                    break
+        elif etype == "business":
+            # entity_id is the google_place_id (place_id)
+            real_id = id_map.get(eid)
 
-    # ── Content for geography levels ────────────────────────────────────
-    # Generate content for each state/region/suburb that has businesses
-    for state_code, state_name in state_map.items():
-        state_content = build_state_content(state_name, state_code,
-            state_biz_counts.get(state_code, 0), params.get("niche_label", "businesses"))
-        for ctype, body in state_content.items():
-            content_statements.append(build_content_upsert("state", state_code, ctype, body, "gemini-2.5-flash"))
-            content_count += 1
+        if real_id is None:
+            logger.warning(f"Content row entity_id '{eid}' ({etype}) could not be resolved to a D1 id — skipping")
+            continue
 
-    for (region_slug, state_code), region_id in region_map.items():
-        region_name = region_slug.replace("-", " ").title()
-        region_content = build_geo_content("region", region_name, state_code,
-            region_biz_counts.get(state_code, 0), params.get("niche_label", "businesses"))
-        for ctype, body in region_content.items():
-            content_statements.append(build_content_upsert("region", region_id, ctype, body, "gemini-2.5-flash"))
-            content_count += 1
-
-    for (suburb_slug, state_code), suburb_id in suburb_map.items():
-        suburb_name = suburb_slug.replace("-", " ").title()
-        suburb_content = build_geo_content("suburb", suburb_name, state_code,
-            0, params.get("niche_label", "businesses"))  # per-suburb count not available without extra query
-        for ctype, body in suburb_content.items():
-            content_statements.append(build_content_upsert("suburb", suburb_id, ctype, body, "gemini-2.5-flash"))
-            content_count += 1
+        content_statements.append(
+            build_content_upsert(etype, real_id, ctype, body, ai_model)
+        )
+        content_count += 1
 
     # ── Execute geography ID updates ────────────────────────────────────
     if update_geo_sql_parts:
@@ -845,20 +841,15 @@ def upload_project(project_id: int, params: dict) -> dict:
     if content_statements:
         d1_execute_batch(account_id, database_id, content_statements, api_token)
 
-    # ── Recompute business_count ────────────────────────────────────────
-    d1_execute(account_id, database_id,
-               "; ".join(build_count_recompute_statements()) + ";",
-               api_token)
-
     return {
         "summary": (f"Uploaded {len(records)} businesses to D1 database {database_id} "
-                    f"(states: {len(states_seen)}, regions: {len(regions_seen)}, "
-                    f"suburbs: {len(suburbs_seen)})"),
+                    f"(states: {len(states)}, regions: {len(regions)}, "
+                    f"suburbs: {len(suburbs)})"),
         "counts": {
             "records": len(records),
-            "states": len(states_seen),
-            "regions": len(regions_seen),
-            "suburbs": len(suburbs_seen),
+            "states": len(states),
+            "regions": len(regions),
+            "suburbs": len(suburbs),
             "businesses": len(records),
             "features": len([s for s in dep_statements if s.startswith("INSERT OR IGNORE INTO business_features")]),
             "hours": len([s for s in dep_statements if s.startswith("INSERT OR IGNORE INTO business_hours")]),

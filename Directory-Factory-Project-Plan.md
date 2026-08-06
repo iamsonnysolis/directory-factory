@@ -340,11 +340,11 @@ scripts/cleaning_enrichment/
 | 2.4 | Read `OLD_TOILETSNEARME_DATA_PATH/generate-eeat.js` in full. Write a short plain-English summary of its prompt structure and content types before writing any Python | Done | Written `scripts/cleaning_enrichment/generate_eeat_stats_summary.md`. Content types generalized: description, services, specialties, seo_keywords, seo_meta_desc. Prompt builder uses google-generativeai with retry/backoff. |
 | 2.5 | Write `enrichment.py` in Python using `google-generativeai`, generating: business description, services list, specialties, SEO keywords, SEO meta description — generic content types instead of toilet-specific EEAT categories. Function signature: `enrich_place(cleaned_record: dict) -> dict` | Done | VERIFIED: build_place_prompt + call_gemini structure confirmed. enrich_place returns dict with 5 content fields + ai_model + generated_at. 10/10 enrichment checks PASS. |
 | 2.6 | Read `OLD_TOILETSNEARME_DATA_PATH/generate-stats.js` for its composite-score approach, then add a `compute_quality_score(cleaned_record: dict, enriched_record: dict) -> int` function to `enrichment.py` | Done | VERIFIED: 4 composite functions ported (calc_accessibility_score, calc_family_score, calc_traveller_score, calc_provision_score) + compute_quality_score. 8/8 score checks PASS. |
-| 2.7 | Wrap `cleaning.py` and `enrichment.py` behind the standard script entry point from Phase 3 (see the `@script_main` pattern there) | Done | Added `__main__` blocks to both files with @script_main. `cleaning.py` reads raw_json from collector.db, writes cleaned_*.jsonl. `enrichment.py` reads cleaned JSONL, calls enrich_place() via Gemini (skip_ai supported), writes enriched_*.jsonl with quality scores. Both verified via runner end-to-end. |
+| 2.7 | Wrap `cleaning.py` and `enrichment.py` behind the standard script entry point from Phase 3 (see the `@script_main` pattern there) | Done | Added `__main__` blocks to both files with @script_main. **`cleaning.py` writes to `data/<pid>/cleaned/{businesses,states,regions,suburbs}.jsonl`** — deduped geography entities with pre-computed `business_count`. **`enrichment.py` reads from `data/<pid>/cleaned/` and writes to `data/<pid>/enriched/{businesses,states,regions,suburbs,content,business_features,business_hours,business_services}.jsonl`** — content rows with `{{placeholder}}` tokens. Both run via `python runner/run.py cleaning.clean --project-id=N` and `enrichment.enrich --project-id=N`. |
 | 2.8 | **NEW (Data-Model-Spec.md):** Add geography resolution to cleaning — resolve suburb, region, state from `addressComponents` (locality → suburb_name, `administrative_area_level_2` → region_name, `administrative_area_level_1` → state_code + state_long). Return resolved fields in `clean_place()` output. No spatial/shapefile logic. | Done | Implemented 2026-08-06. Added `administrative_area_level_2` parsing for `region_name`, added `suburb_name` alias for `locality`, added `state_long` for full state name. Used `shortText` for state_code (e.g. "QLD"). Updated `clean_place()` return dict and docstring. Verified: cleaning.py compiles, dry-run test confirms region_name/suburb_name flow through to D1 upload. |
-| 2.9 | **NEW (Data-Model-Spec.md):** Add geography-level EEAT content generation — for every state/region/suburb with ≥1 business, generate `about`/`local_context`/`faq`/`meta_title`/`meta_description` content rows (same content_type values as business-level, adapted to geographic context). Written to `content` table, not as columns on geography tables. | Not Started | Per Data-Model-Spec.md §"Content model": content_type values include `local_context` only at state/region/suburb level. Uses `{{state_name}}`/`{{region_name}}`/`{{suburb_name}}`/`{{niche_label}}`/`{{business_count}}` placeholders. |
-| 2.10 | **NEW (Data-Model-Spec.md):** Add `business_services` extraction to enrichment — AI-extract service names only (e.g. "Nail Trimming"), leave pricing fields null. Written to `business_services` table, not as a column on `businesses`. | Not Started | Per Data-Model-Spec.md §"Field origin map": business_services (name only) filled by Phase 2 Enrichment. |
-| 2.11 | **NEW (Data-Model-Spec.md):** Update business-level enrichment to write `content` table rows (`about`, `faq`, `tips`, `meta_title`, `meta_description`, `seo_keywords`) with `entity_type='business'` — instead of embedding in the enriched JSONL `enrichment` dict. | Not Started | Per Data-Model-Spec.md: "description / meta_description / seo_keywords are NOT columns here — that text lives in the `content` table". `word_count` column must be computed in Python (`len(body.split())`). |
+| 2.9 | **NEW (Data-Model-Spec.md):** Add geography-level EEAT content generation — for every state/region/suburb with ≥1 business, generate `about`/`local_context`/`faq`/`tips`/`meta_title`/`meta_description` content rows (same content_type values as business-level, adapted to geographic context). Written to `content.jsonl` (uploaded last in Phase 4), not as columns on geography tables. | Done | 2026-08-07: Implemented `_build_state_content()` generating 7 content types per state (about, local_context, faq, tips, meta_title, meta_description, seo_keywords) using `{{state_name}}`/`{{business_count}}`/`{{state_code}}`/`{{niche_label}}` placeholders. Same pattern for regions/suburbs via `_build_geo_content()` with `{{region_name}}`/`{{suburb_name}}` placeholders. Content rows written to `data/<pid>/enriched/content.jsonl` with `entity_type` (state/region/suburb/business), `entity_id` (natural key: state code / "region:slug" / "suburb:slug" / google_place_id), `content_type`, `body`, `word_count`, `ai_model`. Placeholders NOT baked — `{{placeholder}}` tokens preserved in body for Astro render-time substitution per Data-Model-Spec.md. |
+| 2.10 | **NEW (Data-Model-Spec.md):** Add `business_services` extraction to enrichment — AI-extract service names only (e.g. "Nail Trimming"), leave pricing fields null. Written to `business_services` table, not as a column on `businesses`. | Done | 2026-08-07: `business_services.jsonl` now written alongside `business_hours.jsonl` and `business_features.jsonl` in `data/<pid>/enriched/`. Each row: `{"business_place_id": <google_place_id>, "feature_key": <service_name>}`. d1_upload.py reads this file and inserts into `business_services` table. |
+| 2.11 | **NEW (Data-Model-Spec.md):** Update business-level enrichment to write `content` table rows (`about`, `faq`, `tips`, `meta_title`, `meta_description`, `seo_keywords`) with `entity_type='business'` — instead of embedding in the enriched JSONL `enrichment` dict. | Done | 2026-08-07: Business content rows written to `content.jsonl` with `entity_type='business'`, `entity_id=<google_place_id>` (natural key). Maps: description→about, seo_meta_desc→meta_description, seo_keywords→seo_keywords, title→meta_title, tips, faq. `word_count` computed in Python. All content (business + geography levels) lives in `content.jsonl`, uploaded last by d1_upload.py after all entity tables. |
 
 ## Test Process
 
@@ -394,12 +394,11 @@ scripts/cleaning_enrichment/
 - `compute_quality_score()` returns an integer in 0–100 range
 - `build_place_prompt()` returns a non-empty string containing the business name
 - `clean_place()` returns a dict with geography fields: `state_code`, plus resolved `region_name` and `suburb_name` from addressComponents
-- `clean_place()` output includes resolved geography rows (state, region, suburb) for Phase 4 upload
-- Enrichment produces `content` table rows (`about`, `faq`, `tips`, `meta_title`, `meta_description`, `seo_keywords`) for both business-level and geography-level entities
-- `business_services` extraction returns service names only (pricing fields left null)
-- Cleaning script reads `raw_json` from `collector.db`, writes `cleaned_*.jsonl`
-- Enrichment script reads `cleaned_*.jsonl`, writes `enriched_*.jsonl` with quality scores
-- Both runs logged to `runs.db` with `status=success`
+|- `cleaning.py` cleaned data lives at `data/cleaned_<project_id>.jsonl` (single file) OR `data/<pid>/cleaned/{businesses,states,regions,suburbs}.jsonl` (multi-file). The multi-file format is the current standard per Data-Model-Spec.md §"Intermediate Pipeline Data Format". |
+| Enrichment script reads `data/<pid>/cleaned/*.jsonl`, writes `data/<pid>/enriched/*.jsonl` with quality scores + content rows |
+|- Enrichment produces `data/<pid>/enriched/content.jsonl` with `about`, `faq`, `tips`, `meta_title`, `meta_description`, `seo_keywords` rows for both business-level and geography-level entities |
+|`cleaning.py` output includes resolved geography fields: `state_code`, `region_name`, `suburb_name` from addressComponents, plus `region_slug`/`suburb_slug` for join keys |
+|- Cleaning writes `data/<pid>/cleaned/{businesses,states,regions,suburbs}.jsonl` with `business_count` pre-computed per geography entity |
 
 ## Constraints
 - No JavaScript in the new repo. If a piece of `enrich.js` or
@@ -650,7 +649,7 @@ to a directory's own D1 database.
 | ID | Task | Status | Notes |
 |---|---|---|---|
 | 4.1 | Build D1 schema DDL: `states`, `regions`, `suburbs`, `businesses`, `business_features`, `business_hours`, `business_services`, `content`, `site_config` | Done | 2026-08-05: Initial 6-table schema created. 2026-08-06: Rewritten to exact DDL from `Data-Model-Spec.md` (9 tables). Removed `business_notes` and `enrichment_content` (not in spec). `site_config` enhanced with `value_type`/`config_group`/`is_public` columns. CHECK constraint on `content_type` includes all 7 values: about, local_context, faq, tips, meta_title, meta_description, seo_keywords. |
-| 4.2 | Build `scripts/deploy/d1_upload.py` — batch upsert, per-directory D1 credentials passed as params | Done | 2026-08-05: Initial `d1_upload.py` created with `d1_execute()` REST client + `build_business_upsert_sql()`. 2026-08-06: Rewritten to match `Data-Model-Spec.md` — upload order is states → regions → suburbs → businesses → business_features/business_hours/business_services → content (content last). `business_count` recomputed via UPDATE COUNT subquery on states/regions/suburbs. Content rows written with `word_count` computed in Python. Enrichment field mapping: description→about, seo_meta_desc→meta_description, seo_keywords→seo_keywords. Services read from `enrichment.services`. Geography resolution reads `region_name`/`suburb_name` from cleaned records. |
+| 4.2 | Build `scripts/deploy/d1_upload.py` — batch upsert, per-directory D1 credentials passed as params | Done | 2026-08-05: Initial `d1_upload.py` created with `d1_execute()` REST client + `build_business_upsert_sql()`. 2026-08-06: Rewritten to match `Data-Model-Spec.md` — upload order: states → regions → suburbs → businesses → business_features/business_hours/business_services → content (content last). 2026-08-07: **Reworked to flat per-table JSONL** — reads `data/<pid>/enriched/{businesses,states,regions,suburbs,content,business_features,business_hours,business_services}.jsonl` instead of single `enriched_<pid>.jsonl`. Geography entities deduped in cleaning.py and written to dedicated files. Content rows read from `content.jsonl` (generated by enrichment.py) instead of being statically templated in d1_upload.py. `{{placeholder}}` tokens preserved in content body — resolved at Astro render time, NOT baked at upload. Natural-key → D1-id resolution happens in upload_project() via post-load SELECT lookups and per-record UPDATE statements (businesses use `region_slug`/`suburb_slug` on each record). Removed `build_state_content()` / `build_geo_content()` from upload path (kept as utils). |
 | 4.3 | Wrap behind the standard script contract (Phase 3) | Done | 2026-08-05. Uses `@script_main` decorator from `runner/contract.py`. Registered as `upload.d1` in `runner/run.py` SCRIPT_MAP. Runnable via `python runner/run.py upload.d1 --project-id=N --params='{...}'`. Interface unchanged — internal SQL/upload-order logic aligned to Data-Model-Spec.md. |\n| 4.4 | Test against one directory's cleaned/enriched data | Done | Re-verified 2026-08-06 after schema rewrite: 7 dry-run checks PASS (states=1, regions=1, suburbs=1, businesses=1, services=4, content=21, upload order correct). Error cases verified: missing params → ValueError, missing file → FileNotFoundError, missing token → RuntimeError. |\n| 4.5 | **NEW (Data-Model-Spec.md):** Update `d1_upload.py` and `d1_schema.sql` to match spec exactly | Done | Completed 2026-08-06. Both files rewritten to match `Data-Model-Spec.md` 9-table schema. Verified via ad-hoc runtime dry-run test. |
 
 ## Test Process
@@ -658,7 +657,7 @@ to a directory's own D1 database.
 ### Prerequisites
 - D1 schema DDL file exists at `scripts/deploy/d1_schema.sql` (now uses Data-Model-Spec.md exact DDL)
 - `d1_upload.py` exists at `scripts/deploy/d1_upload.py` (updated to match spec)
-- An enriched JSONL file exists at `data/enriched_<project_id>.jsonl` (with geography resolution from Phase 2.8)
+- Cleaned + enriched data in per-table JSONL at `data/<project_id>/cleaned/*.jsonl` and `data/<project_id>/enriched/*.jsonl`
 
 ### Steps
 1. **Test schema DDL matches Data-Model-Spec.md exactly:**
@@ -676,10 +675,20 @@ to a directory's own D1 database.
    ```
 2. **Test dry-run upload (no real Cloudflare creds needed):**
    ```bash
-   echo '{"slug":"test-groomer","name":"Test Groomer","state_code":"QLD","region":"Brisbane","suburb":"West End","lat":-27.47,"lng":153.0,"feature_keys":["grooming"],"hours_rows":[{"day_of_week":1,"open_mins":540,"close_mins":1080}],"services":["Haircut"]}' > data/enriched_42.jsonl
+   # Create minimal per-table JSONL test data
+   mkdir -p data/42/cleaned data/42/enriched
+   echo '{"place_id":"test-place-1","name":"Test Groomer","slug":"test-groomer","state_code":"QLD","region_slug":"brisbane","suburb_slug":"west-end","lat":-27.47,"lng":153.0,"feature_keys":["grooming"],"hours_rows":[{"day_of_week":1,"open_mins":540,"close_mins":1080}],"services":["Haircut"]}' > data/42/cleaned/businesses.jsonl
+   echo '{"code":"QLD","name":"Queensland","slug":"qld","business_count":1}' > data/42/cleaned/states.jsonl
+   echo '{"slug":"brisbane","state_code":"QLD","name":"Brisbane","business_count":1}' > data/42/cleaned/regions.jsonl
+   echo '{"slug":"west-end","state_code":"QLD","name":"West End","postcode":"4101","business_count":1}' > data/42/cleaned/suburbs.jsonl
+   echo '{"place_id":"test-place-1","name":"Test Groomer","slug":"test-groomer","state_code":"QLD","region_slug":"brisbane","suburb_slug":"west-end","lat":-27.47,"lng":153.0,"feature_keys":["grooming"],"hours_rows":[{"day_of_week":1,"open_mins":540,"close_mins":1080}]}' > data/42/enriched/businesses.jsonl
+   echo '{"code":"QLD","name":"Queensland","slug":"qld","business_count":1}' > data/42/enriched/states.jsonl
+   echo '{"slug":"brisbane","state_code":"QLD","name":"Brisbane","business_count":1}' > data/42/enriched/regions.jsonl
+   echo '{"slug":"west-end","state_code":"QLD","name":"West End","postcode":"4101","business_count":1}' > data/42/enriched/suburbs.jsonl
+   echo '{"entity_type":"state","entity_id":"QLD","content_type":"about","body":"Find {{business_count}} {{niche_label}} in {{state_name}}.","word_count":0,"ai_model":"gemini-2.5-flash"}' > data/42/enriched/content.jsonl
    python runner/run.py upload.d1 --project-id=42 \
      --params='{"d1_account_id":"test","d1_database_id":"db","site_name":"Test Directory","dry_run":true}'
-   # Should return status=success with 9-level upload plan (states, regions, suburbs, businesses, features, hours, services, content, counts recompute)
+   # Should return status=success with flat per-table upload plan
    ```
 3. **Test missing params error:**
    ```bash
@@ -701,12 +710,12 @@ to a directory's own D1 database.
    ```
 
 ### Expected Results
-- Schema has all 9 tables from Data-Model-Spec.md (states, regions, suburbs, businesses, business_features, business_hours, business_services, content, site_config)
-- Schema does NOT have `business_notes` or `enrichment_content` (removed by spec)
-- Dry-run returns `status=success` with correct 9-level upload counts
-- Missing params → `status=error` with ValueError
-- Missing enriched file → `status=error` with FileNotFoundError
-- Missing API token → `status=error` with RuntimeError
+|- Schema has all 9 tables from Data-Model-Spec.md (states, regions, suburbs, businesses, business_features, business_hours, business_services, content, site_config) |
+|- Schema does NOT have `business_notes` or `enrichment_content` (removed by spec) |
+|- Dry-run returns `status=success` with correct counts from per-table files |
+|- Missing params → `status=error` with ValueError |
+|- Missing enriched file → `status=error` with FileNotFoundError |
+|- Missing API token → `status=error` with RuntimeError |
 
 ---
 

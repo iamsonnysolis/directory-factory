@@ -404,6 +404,100 @@ setting is ever added later, rather than by convention alone.
 
 ---
 
+---
+
+## Intermediate Pipeline Data Format (Phase 2 output shape)
+
+This governs the files `cleaning.py` and `enrichment.py` read and write
+between Phase 1 (Collection) and Phase 4 (Upload). The rule: **mirror the
+D1 schema exactly — one flat JSONL file per table, at each stage.** Never
+nest geography inside business records, and never combine multiple tables'
+worth of data into one JSON document. Every stage is "read one or more
+`.jsonl` files, transform, write `.jsonl` files" — the same shape as every
+other script wrapped by the Phase 3 runner contract.
+
+```
+data/<project_id>/cleaned/
+    businesses.jsonl     -- one line per business; carries state_code,
+                             region_slug, suburb_slug as plain fields
+                             (foreign keys, not duplicated content)
+    states.jsonl          -- deduped during cleaning; business_count
+                             computed here via a groupby over businesses.jsonl
+    regions.jsonl
+    suburbs.jsonl
+
+data/<project_id>/enriched/
+    businesses.jsonl      -- cleaned rows + enrichment fields merged in
+    states.jsonl            -- + any transient stats needed for prompts
+                               (not all persisted — see note below)
+    regions.jsonl
+    suburbs.jsonl
+    content.jsonl            -- entity_type/entity_id/content_type/body/
+                                 word_count/ai_model — one row per EEAT
+                                 block, at ANY level (state/region/suburb/
+                                 business), same shape as the content table
+    business_features.jsonl
+    business_hours.jsonl
+    business_services.jsonl
+```
+
+### Why flat files, not a nested tree
+
+A nested single-document tree (states → regions → suburbs → businesses,
+with content/stats embedded at each level) was considered and rejected.
+It solves duplication by nesting everything into one entity per location,
+but a flat file gets the same "one canonical record per geography entity"
+guarantee without the downsides: a tree can't be streamed or processed
+record-by-record, can't resume cleanly after a crash partway through a
+5,000+ business directory, and has to be flattened back into lists at
+upload time anyway since D1 is relational — meaning the nesting work in
+cleaning gets undone again in Phase 4. Flat JSONL files avoid doing that
+work twice, and keep every pipeline stage the same simple shape.
+
+### Cross-file references (no real DB ids exist yet)
+
+Every file joins on **natural keys**, since D1 autoincrement ids don't
+exist until upload:
+- `states.jsonl` rows are keyed by `code`
+- `regions.jsonl` / `suburbs.jsonl` rows are keyed by `(slug, state_code)`
+- `businesses.jsonl` rows are keyed by `google_place_id`
+- `content.jsonl` rows use the relevant natural key as `entity_id` during
+  the pipeline (e.g. `'QLD'` for a state, `'brisbane:QLD'` for a region,
+  the `google_place_id` for a business) — **not** a real integer id
+
+`d1_upload.py` already uploads in FK order — states → regions → suburbs →
+businesses → business_features/business_hours/business_services →
+**content last**. This order is what makes the natural-key-to-real-id
+translation possible: as each table is upserted, keep a lookup dict of
+natural key → the row's real D1 id, and use it to rewrite `content.jsonl`
+entity_ids to real ids immediately before inserting into the `content`
+table. This is why content uploads last — every other entity's real id
+needs to exist first.
+
+### Statistics: computed during cleaning, mostly not persisted
+
+`business_count` is computed onto `states.jsonl`/`regions.jsonl`/
+`suburbs.jsonl` during cleaning (a groupby over `businesses.jsonl`) and
+flows straight into the matching D1 column. Other feature-count
+breakdowns used only to give Gemini accurate numbers for geography-level
+prompts (e.g. "295 of 387 are wheelchair accessible") can be computed the
+same way and kept in the geo `.jsonl` rows — but they're **pipeline-
+internal working data**, not new D1 columns. There's no `stats` table in
+this schema (see "Explicitly out of scope" above) and this doesn't change
+that.
+
+### Content placeholders: resolved at render time, not generation time
+
+Content generated during enrichment keeps `{{business_count}}`-style
+placeholders in the stored text (per the "Content model" section above) —
+**do not** bake resolved numbers into the generated text at enrichment
+time. If a directory's data changes later (e.g. a re-collection adds five
+more businesses), placeholder content stays accurate automatically at the
+next render; content with numbers baked in at generation time goes quietly
+stale until someone notices and pays for a Gemini regeneration to fix it.
+
+---
+
 ## Explicitly out of scope for v1
 
 - **`stats` table** — not planned. Ranking/comparison pages were a
@@ -412,3 +506,4 @@ setting is ever added later, rather than by convention alone.
 - **Pricing on `business_services`** — the columns exist, but don't
   populate them until real pricing data is actually available from a
   source. Don't estimate or infer prices to fill the gap.
+

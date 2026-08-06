@@ -912,6 +912,12 @@ if __name__ == "__main__":
 
     from runner.contract import script_main
 
+    def _write_jsonl(path: str, records: list) -> None:
+        """Write records as JSONL (one JSON object per line)."""
+        with open(path, "w") as f:
+            for rec in records:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
     # Resolve collector DB path — respects DATABASE_URL env var (same pattern
     # as scripts/collection/database.py) so cleaning.py and collection engine
     # always read from the same DB file, regardless of which script invoked.
@@ -929,14 +935,21 @@ if __name__ == "__main__":
         """Clean all raw places for a project.
 
         Reads raw_json from the collection DB's ``places`` table, runs
-        ``clean_place()`` on each, and writes cleaned records to
-        ``data/cleaned_<project_id>.jsonl``.
+        ``clean_place()`` on each, and writes per-table JSONL files per
+        Data-Model-Spec.md §"Intermediate Pipeline Data Format":
+
+        data/<project_id>/cleaned/
+            businesses.jsonl  — one line per business; carries state_code,
+                                 region_slug, suburb_slug as foreign-key fields
+            states.jsonl      — deduped during cleaning; business_count via groupby
+            regions.jsonl
+            suburbs.jsonl
 
         Args:
             project_id: The collection project ID.
             params: Optional parameters:
                 - ``taxonomy_path``: Path to a per-niche feature taxonomy JSON.
-                - ``dry_run``: If True, don't write output file.
+                - ``dry_run``: If True, don't write output files.
         """
         import datetime as _dt
 
@@ -984,13 +997,89 @@ if __name__ == "__main__":
             except Exception:
                 skipped += 1
 
+        # ── Build deduped geography entities with business_count ─────────────
+        # Per Data-Model-Spec.md: business_count computed during cleaning
+        # via groupby over the cleaned business records.
+        # Geography entities are keyed by their natural keys:
+        #   states: code
+        #   regions: (slug, state_code)
+        #   suburbs: (slug, state_code)
+        states_seen = {}
+        regions_seen = {}   # key: (slug, state_code) → {slug, state_code, name}
+        suburbs_seen = {}   # key: (slug, state_code) → {slug, state_code, name, postcode, region_slug}
+        state_biz_counts = {}
+        region_biz_counts = {}
+        suburb_biz_counts = {}
+
+        for rec in cleaned_records:
+            sc = rec.get("state_code")
+            sl = rec.get("state_long", "")
+            rname = rec.get("region_name")
+            sname = rec.get("suburb_name")
+
+            # States
+            if sc and sc not in states_seen:
+                states_seen[sc] = {"code": sc, "name": sl, "slug": slugify(sl) or slugify(sc)}
+            state_biz_counts[sc] = state_biz_counts.get(sc, 0) + 1
+
+            # Regions
+            rslug = None
+            rkey = None
+            if rname and sc:
+                rslug = slugify(rname) or slugify(f"{rname}-{sc}")
+                rkey = (rslug, sc)
+                if rkey not in regions_seen:
+                    regions_seen[rkey] = {
+                        "slug": rslug,
+                        "state_code": sc,
+                        "name": rname,
+                    }
+                region_biz_counts[rkey] = region_biz_counts.get(rkey, 0) + 1
+
+            # Suburbs
+            sslug = None
+            skey = None
+            if sname and sc:
+                sslug = slugify(sname) or slugify(f"{sname}-{sc}")
+                skey = (sslug, sc)
+                if skey not in suburbs_seen:
+                    suburbs_seen[skey] = {
+                        "slug": sslug,
+                        "state_code": sc,
+                        "name": sname,
+                        "postcode": rec.get("postal_code"),
+                        "region_slug": rslug,  # set during first encounter of this suburb
+                    }
+                suburb_biz_counts[skey] = suburb_biz_counts.get(skey, 0) + 1
+
+            # Add region_slug / suburb_slug to business records (for upload FK resolution)
+            rec["region_slug"] = rslug
+            rec["suburb_slug"] = sslug
+
+        # Assemble geography lists with business_count applied
+        states_list = []
+        for sc, info in states_seen.items():
+            info["business_count"] = state_biz_counts.get(sc, 0)
+            states_list.append(info)
+
+        regions_list = []
+        for rkey, info in regions_seen.items():
+            info["business_count"] = region_biz_counts.get(rkey, 0)
+            regions_list.append(info)
+
+        suburbs_list = []
+        for skey, info in suburbs_seen.items():
+            info["business_count"] = suburb_biz_counts.get(skey, 0)
+            suburbs_list.append(info)
+
         if not dry_run:
-            output_dir = os.path.join(_PROJECT_ROOT, "data")
+            output_dir = os.path.join(_PROJECT_ROOT, "data", str(project_id), "cleaned")
             os.makedirs(output_dir, exist_ok=True)
-            output_path = os.path.join(output_dir, f"cleaned_{project_id}.jsonl")
-            with open(output_path, "w") as f:
-                for record in cleaned_records:
-                    f.write(json.dumps(record) + "\n")
+
+            _write_jsonl(os.path.join(output_dir, "businesses.jsonl"), cleaned_records)
+            _write_jsonl(os.path.join(output_dir, "states.jsonl"), states_list)
+            _write_jsonl(os.path.join(output_dir, "regions.jsonl"), regions_list)
+            _write_jsonl(os.path.join(output_dir, "suburbs.jsonl"), suburbs_list)
 
         return {
             "summary": f"Cleaned {len(cleaned_records)} places for project {project_id} "
@@ -999,7 +1088,10 @@ if __name__ == "__main__":
                 "places": len(rows),
                 "cleaned": len(cleaned_records),
                 "skipped": skipped,
-                "output_file": f"data/cleaned_{project_id}.jsonl" if not dry_run else None,
+                "states": len(states_list),
+                "regions": len(regions_list),
+                "suburbs": len(suburbs_list),
+                "output_dir": f"data/{project_id}/cleaned/" if not dry_run else None,
             },
         }
 
