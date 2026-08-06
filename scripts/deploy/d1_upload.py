@@ -611,7 +611,7 @@ def upload_project(project_id: int, params: dict) -> dict:
     if dry_run:
         total_features = sum(len(r.get("feature_keys", [])) for r in records)
         total_hours = sum(len(r.get("hours_rows", [])) for r in records)
-        total_services = sum(len(r.get("services", [])) for r in records)
+        total_services = sum(len(r.get("services", [])) + len(r.get("enrichment", {}).get("services", [])) for r in records)
         total_content = len(records) * 6 + len(states_seen) * 5 + len(regions_seen) * 5 + len(suburbs_seen) * 5
 
         return {
@@ -768,26 +768,45 @@ def upload_project(project_id: int, params: dict) -> dict:
         if hours_rows:
             dep_statements.extend(build_hours_inserts(biz_id, hours_rows))
 
-        # Services
+        # Services (business_services — name only, pricing null per Data-Model-Spec.md)
         services = record.get("services", [])
+        if not services:
+            services = record.get("enrichment", {}).get("services", [])
         if services:
             dep_statements.extend(build_service_inserts(biz_id, services))
 
         # Content — business-level (about, faq, tips, meta_title, meta_description, seo_keywords)
-        content = record.get("content", record.get("enrichment", {}))
-        if content:
-            for ctype in ["about", "faq", "tips", "meta_title", "meta_description", "seo_keywords"]:
-                body = content.get(ctype) if isinstance(content.get(ctype), str) else content.get(ctype)
-                if body:
-                    if ctype == "seo_keywords" and isinstance(body, list):
-                        body = ", ".join(body)
-                    elif ctype in ("about", "faq", "tips") and isinstance(body, list):
-                        body = " ".join(str(b) for b in body)
-                    content_statements.append(
-                        build_content_upsert("business", biz_id, ctype, str(body),
-                                            content.get("ai_model", content.get("ai_model", "gemini-2.5-flash")))
-                    )
-                    content_count += 1
+        # Per Data-Model-Spec.md: enrichment writes content rows, not columns on businesses.
+        # The enrichment output uses these field names:
+        #   description → about, seo_meta_desc → meta_description,
+        #   seo_keywords → seo_keywords, services → business_services (handled above)
+        # We also support a pre-mapped `content` dict if it exists.
+        enrichment = record.get("enrichment", {})
+        content = record.get("content", {})
+        merged_content = {**enrichment, **content}
+
+        # Map enrichment field names to content_type values
+        content_mapping = {
+            "about": merged_content.get("about", merged_content.get("description")),
+            "faq": merged_content.get("faq"),
+            "tips": merged_content.get("tips"),
+            "meta_title": merged_content.get("meta_title"),
+            "meta_description": merged_content.get("meta_description",
+                                                    merged_content.get("seo_meta_desc")),
+            "seo_keywords": merged_content.get("seo_keywords"),
+        }
+
+        for ctype, body in content_mapping.items():
+            if body:
+                if ctype == "seo_keywords" and isinstance(body, list):
+                    body = ", ".join(body)
+                elif ctype in ("about", "faq", "tips") and isinstance(body, list):
+                    body = " ".join(str(b) for b in body)
+                content_statements.append(
+                    build_content_upsert("business", biz_id, ctype, str(body),
+                                        merged_content.get("ai_model", "gemini-2.5-flash-lite"))
+                )
+                content_count += 1
 
     # ── Content for geography levels ────────────────────────────────────
     # Generate content for each state/region/suburb that has businesses

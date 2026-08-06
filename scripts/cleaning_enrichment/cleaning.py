@@ -695,12 +695,9 @@ def clean_place(raw_json: dict) -> dict:
     Returns:
         A cleaned dict with normalized fields:
 
-        ``name``, ``slug``, ``address``, ``locality``, ``state``/``state_code``,
-        ``postal_code``, ``country``, ``lat``, ``lng``, ``phone``,
-        ``national_phone``, ``website``, ``place_id``, ``primary_type``,
-        ``business_status``, ``rating``, ``user_rating_count``, ``is_24_hours``,
-        ``opening_hours_raw``, ``opening_hours_note``, ``feature_keys``,
-        ``notes``, ``hours_rows``, ``data_completeness_score``
+        ``name``, ``slug``, ``address``, ``locality``, ``suburb_name``,
+        ``region_name``, ``state_code``/``state_long``, ``postal_code``, ``country``,
+        ``lat``, ``lng``, ``phone``,\n        ``national_phone``, ``website``, ``place_id``, ``primary_type``,\n        ``business_status``, ``rating``, ``user_rating_count``, ``is_24_hours``,\n        ``opening_hours_raw``, ``opening_hours_note``, ``feature_keys``,\n        ``notes``, ``hours_rows``, ``data_completeness_score``
     """
     raw = raw_json if isinstance(raw_json, dict) else {}
     _raw = raw.get("_raw", raw)  # unwrap if already validated
@@ -722,8 +719,13 @@ def clean_place(raw_json: dict) -> dict:
     address = clean_text(_raw.get("formattedAddress") or _raw.get("formatted_address"))
 
     # Parse address components for structured fields
+    # Per Data-Model-Spec.md: resolve suburb (locality), region
+    # (administrative_area_level_2), and state (administrative_area_level_1)
+    # from addressComponents during cleaning — no spatial/shapefile logic.
     locality = None
+    region_name = None
     state_code = None
+    state_long = None
     postal_code = None
     country = None
     address_components = _raw.get("addressComponents") or _raw.get("address_components") or []
@@ -733,10 +735,15 @@ def clean_place(raw_json: dict) -> dict:
             if isinstance(comp_types, list) and comp_types:
                 first_type = comp_types[0]
                 long_name = comp.get("longText") or comp.get("long_name") or ""
+                short_name = comp.get("shortText") or comp.get("short_name") or ""
                 if first_type == "locality":
                     locality = clean_text(long_name)
+                elif first_type == "administrative_area_level_2":
+                    region_name = clean_text(long_name)
                 elif first_type == "administrative_area_level_1":
-                    state_code = clean_text(long_name)
+                    # short_name is the state code (e.g. "QLD"), long_name is full name
+                    state_code = clean_text(short_name) or clean_text(long_name)
+                    state_long = clean_text(long_name)
                 elif first_type == "postal_code":
                     postal_code = clean_text(long_name)
                 elif first_type == "country":
@@ -845,7 +852,10 @@ def clean_place(raw_json: dict) -> dict:
         "slug": f"{name_slug}-{place_id[-8:]}" if place_id else name_slug,
         "address": address,
         "locality": locality,
+        "suburb_name": locality,      # Per Data-Model-Spec.md: locality maps to suburb for D1 upload
+        "region_name": region_name,   # Per Data-Model-Spec.md: administrative_area_level_2
         "state_code": state_code,
+        "state_long": state_long,     # Full state name (e.g. "Queensland") for display
         "postal_code": postal_code,
         "country": country,
         "lat": lat,

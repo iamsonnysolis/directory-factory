@@ -12,5 +12,8 @@ phonenumbers>=8.13.0
 python-slugify>=8.0.0
 google-genai>=1.0.0
 
+# Phase 4: D1 Upload (Cloudflare REST API client)
+requests>=2.31.0
+
 # Phase 3: Standardized script runner
 # (stdlib only — argparse, sqlite3, subprocess, json, os, sys)
