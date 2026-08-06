@@ -1,0 +1,151 @@
+---
+// Listing detail page (SSR) - Orchestrator for listing detail view
+// Uses SEO and Schema utilities, data fetched via D1
+import Layout from '../../../../layouts/Layout.astro';
+import ListingHeader from '../../../../components/listing/ListingHeader.astro';
+import ListingMap from '../../../../components/listing/ListingMap.astro';
+import Notes from '../../../../components/listing/Notes.astro';
+import FeatureList from '../../../../components/listing/FeatureList.astro';
+import OpeningHours from '../../../../components/listing/OpeningHours.astro';
+import NearbyListings from '../../../../components/listing/NearbyListings.astro';
+import MoreListingsSection from '../../../../components/listing/MoreListingsSection.astro';
+import { fetchListingDetailData } from '../../../../lib/db';
+import { formatHoursForDisplay } from '../../../../lib/hours';
+import { loadSiteConfig } from '../../../../lib/site-config';
+import { getFacilityMetadata } from '../../../../lib/utils/seo';
+import { buildBreadcrumbSchema, buildListingSchema, serializeSchema } from '../../../../lib/utils/schema';
+
+const { state, region, suburb, listing: facility } = Astro.params;
+
+// Validate required params
+if (!state || !region || !suburb || !facility) {
+  return Astro.redirect('/');
+}
+
+// Fetch all data via the database utility
+const data = await fetchListingDetailData({ state, region, suburb, listing: facility });
+
+if (!data || !data.listing) {
+  return Astro.redirect('/');
+}
+
+const config = await loadSiteConfig();
+
+// Destructure fetched data
+const {
+  listing: listingData,
+  state: stateRecord,
+  region: regionData,
+  suburb: suburbData,
+  features,
+  hours,
+  notes,
+  nearbyListings,
+  stateSlug,
+  stateCode
+} = data;
+
+// Calculate derived values
+const is24Hours = hours?.some(h => h.is_open_24h && h.day_of_week === null) ?? false;
+const formattedHours = formatHoursForDisplay(hours || []);
+
+// Build breadcrumbs for header and schema (listing itself is the last item)
+const breadcrumbs = [
+  { label: 'Home', href: '/' },
+  { label: stateRecord?.name ?? stateSlug, href: `/${stateSlug}` },
+  ...(regionData ? [{ label: regionData.name_clean ?? regionData.name, href: `/${stateSlug}/${regionData.slug}` }] : []),
+  ...(suburbData ? [{ label: suburbData.name, href: `/${stateSlug}/${region}/${suburbData.slug}` }] : []),
+  { label: listingData.name, href: '' }, // Current page - no link
+];
+
+// Build schema objects
+const breadcrumbSchema = buildBreadcrumbSchema(breadcrumbs);
+const listingSchema = buildListingSchema(
+  {
+    name: listingData.name,
+    address: listingData.address,
+    town: listingData.town,
+    latitude: listingData.latitude,
+    longitude: listingData.longitude,
+    is_open_24h: is24Hours
+  },
+  stateSlug,
+  listingData.region_slug,
+  listingData.suburb_slug,
+  listingData.slug ?? facility
+);
+
+// Get SEO metadata
+const metadata = getFacilityMetadata(
+  {
+    name: listingData.name,
+    address: listingData.address,
+    town: listingData.town,
+    region_slug: listingData.region_slug,
+    suburb_slug: listingData.suburb_slug,
+    slug: listingData.slug ?? facility,
+  },
+  stateSlug,
+  config
+);
+---
+
+<Layout metadata={metadata}>
+  {/* Structured Data */}
+  <script type="application/ld+json" set:html={serializeSchema(breadcrumbSchema)} />
+  <script type="application/ld+json" set:html={serializeSchema(listingSchema)} />
+
+  {/* Header Component - has internal mb-4 spacing at end */}
+  <div class="bg-white border-b border-gray-100">
+    <div class="max-w-2xl mx-auto px-4 pt-5 pb-5">
+      <ListingHeader
+        name={listingData.name}
+        address={listingData.address}
+        town={listingData.town}
+        stateName={stateRecord?.name ?? ''}
+        latitude={listingData.latitude}
+        longitude={listingData.longitude}
+        facilityId={parseInt(listingData.listing_id)}
+        is24Hours={is24Hours}
+        features={features}
+        breadcrumbs={breadcrumbs}
+      />
+    </div>
+  </div>
+
+  <main class="max-w-2xl mx-auto px-4 pt-5 pb-8 flex flex-col gap-5">
+    <Notes notes={notes} />
+    <FeatureList features={features} />
+    <OpeningHours formattedHours={formattedHours} openingHoursNote={listingData.opening_hours_note} />
+
+    {listingData.latitude && listingData.longitude && (
+      <ListingMap
+        latitude={listingData.latitude}
+        longitude={listingData.longitude}
+        name={listingData.name}
+        facilityId={listingData.listing_id}
+      />
+    )}
+
+    <NearbyListings nearbyListings={nearbyListings} stateSlug={stateSlug} />
+
+    <MoreListingsSection
+      stateSlug={stateSlug}
+      regionSlug={regionData?.slug}
+      regionName={regionData?.name_clean ?? regionData?.name}
+      regionFacilityCount={regionData?.listing_count}
+      suburbSlug={suburbData?.slug}
+      suburbName={suburbData?.name}
+      suburbFacilityCount={suburbData?.listing_count}
+    />
+
+    {listingData.source_url && (
+      <p class="text-xs text-gray-400">
+        Source: {' '}
+        <a href={listingData.source_url} target="_blank" rel="noopener noreferrer" class="underline hover:text-gray-600">
+          National Public Listing Map
+        </a>
+      </p>
+    )}
+  </main>
+</Layout>

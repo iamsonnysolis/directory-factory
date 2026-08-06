@@ -1,0 +1,223 @@
+---
+// Region-level feature-filter page: /[state]/[region]/with/[feature]/
+// Shows all listings in a region with a specific feature
+// Layout uses grid for better scan-ability and SEO
+import Layout from '../../../../layouts/Layout.astro';
+import RegionMap from '../../../../components/directory/RegionMap.astro';
+import ListingGridCard from '../../../../components/directory/ListingGridCard.astro';
+import FeaturePills from '../../../../components/directory/FeaturePills.astro';
+import Icon from '../../../../components/ui/Icon.astro';
+import { FEATURE_KEYS, type FeatureKey, toSnakeCase, toKebabCase } from '../../../../lib/types';
+import { getFeatureLabel } from '../../../../lib/feature-icons';
+import { fetchRegionListingsByFeature, fetchRegionData } from '../../../../lib/db';
+import { SITE_URL, SITE_NAME, TWITTER_HANDLE } from '../../../../lib/utils/seo';
+import { buildBreadcrumbSchema, buildRegionSchema, buildRegionFeatureSchema, serializeSchema } from '../../../../lib/utils/schema';
+export const prerender = false;
+
+const { state, region, feature } = Astro.params;
+
+// Validate required params
+if (!state || !region || !feature) {
+  return Astro.redirect('/');
+}
+
+// Convert kebab-case URL param to snake_case for validation (backward compatibility)
+const normalizedFeatureSnake = toSnakeCase(feature.toLowerCase()) as FeatureKey;
+const isValidFeature = FEATURE_KEYS.includes(normalizedFeatureSnake);
+
+// Redirect old snake_case URLs to kebab-case
+const kebabFeature = toKebabCase(feature.toLowerCase());
+if (feature !== kebabFeature) {
+  return Astro.redirect(`/${state.toLowerCase()}/${region}/with/${kebabFeature}`, 301);
+}
+
+// Fetch data
+const stateCode = state.toUpperCase();
+const stateSlug = state.toLowerCase();
+const regionSlug = region;
+const { state: stateData, region: regionData } = await fetchRegionData(stateSlug, regionSlug);
+const listings = await fetchRegionListingsByFeature(stateCode, regionSlug, normalizedFeatureSnake);
+
+// Redirect checks
+if (!stateData) {
+  return Astro.redirect('/');
+}
+
+if (!regionData) {
+  return Astro.redirect(`/${stateSlug}`);
+}
+
+// Use clean variable names
+const regionName = regionData.name_clean ?? regionData.name ?? regionSlug;
+const facilitiesData = listings ?? [];
+const featureLabel = getFeatureLabel(normalizedFeatureSnake);
+
+// Build breadcrumbs for schema (use kebab-case for URLs)
+const currentPageUrl = `/${stateSlug}/${regionSlug}/with/${kebabFeature}`;
+const breadcrumbs = [
+  { label: 'Home', href: '/' },
+  { label: stateData.name ?? stateCode, href: `/${stateSlug}` },
+  { label: regionName, href: `/${stateSlug}/${regionSlug}` },
+  { label: `${featureLabel} Facilities`, href: currentPageUrl }, // Current page - full URL for schema
+];
+
+// Build map center based on listings or fallback
+const STATE_CENTRES: Record<string, { lat: number; lng: number }> = {
+  QLD: { lat: -27.5, lng: 153.0 },
+  NSW: { lat: -33.9, lng: 151.2 },
+  VIC: { lat: -37.8, lng: 145.0 },
+  WA:  { lat: -31.9, lng: 115.9 },
+  SA:  { lat: -34.9, lng: 138.6 },
+  TAS: { lat: -42.9, lng: 147.3 },
+  ACT: { lat: -35.3, lng: 149.1 },
+  NT:  { lat: -12.5, lng: 130.8 },
+};
+
+let centerLat = STATE_CENTRES[stateData.code ?? stateCode]?.lat ?? -27.5;
+let centerLng = STATE_CENTRES[stateData.code ?? stateCode]?.lng ?? 133.8;
+
+if (facilitiesData.length > 0) {
+  const valid = facilitiesData.filter(t => t.latitude && t.longitude);
+  if (valid.length > 0) {
+    centerLat = valid[0].latitude;
+    centerLng = valid[0].longitude;
+  }
+}
+
+// Build schema objects
+const breadcrumbSchema = buildBreadcrumbSchema(breadcrumbs);
+const regionJsonLd = buildRegionSchema(stateData.code ?? stateCode, {
+  name_clean: regionName,
+  slug: regionSlug,
+  listing_count: regionData.listing_count ?? 0,
+});
+const featureSchema = buildRegionFeatureSchema(
+  stateData.code ?? stateCode,
+  { name_clean: regionName, slug: regionSlug, listing_count: regionData.listing_count ?? 0 },
+  normalizedFeatureSnake,
+  facilitiesData.length
+);
+
+// Prepare SEO metadata - custom canonical for feature page
+const regionForSEO = {
+  name_clean: regionName,
+  slug: regionSlug,
+  listing_count: regionData.listing_count ?? 0,
+};
+const featurePageUrl = `${SITE_URL}/${stateSlug}/${regionSlug}/with/${kebabFeature}`;
+const title = `Find ${featureLabel} Facilities in ${regionName} | Near Me Directory`;
+const description = `Find ${featureLabel.toLowerCase()} public listings in ${regionName}. View addresses, opening hours and ${featureLabel.toLowerCase()} information across ${facilitiesData.length} locations.`;
+
+const metadata = {
+  title,
+  description,
+  canonical: featurePageUrl,
+  robots: { index: true, follow: true },
+  openGraph: {
+    siteName: SITE_NAME,
+    type: 'website' as const,
+    title,
+    description,
+    url: featurePageUrl,
+    images: [{ url: `${SITE_URL}/og-default.png`, width: 1200, height: 630, alt: title }],
+  },
+  twitter: {
+    card: 'summary_large_image' as const,
+    site: TWITTER_HANDLE,
+    title,
+    description,
+    images: [`${SITE_URL}/og-default.png`],
+  },
+};
+---
+
+<Layout metadata={metadata}>
+  {/* Structured Data */}
+  <script type="application/ld+json" set:html={serializeSchema(breadcrumbSchema)} />
+  <script type="application/ld+json" set:html={serializeSchema(regionJsonLd)} />
+  <script type="application/ld+json" set:html={serializeSchema(featureSchema)} />
+
+  <!-- Region Header Section -->
+  <div class="bg-white border-b border-gray-100">
+    <div class="max-w-5xl mx-auto px-4 py-5">
+      <!-- Breadcrumb -->
+      <nav aria-label="Breadcrumb" class="mb-3">
+        <ol class="flex items-center gap-1 flex-wrap text-xs text-gray-400">
+          {breadcrumbs.map((item, i) => {
+            const isLast = i === breadcrumbs.length - 1;
+            return (
+              <li class="flex items-center gap-1 min-w-0">
+                {i > 0 && <Icon name="chevronRight" size={14} class="text-gray-300 shrink-0" />}
+                {isLast ? (
+                  <span class="text-gray-600 font-medium truncate">{item.label}</span>
+                ) : (
+                  <a href={item.href} class="hover:text-blue-600 transition-colors truncate">
+                    {item.label}
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+
+      <h1 class="text-2xl font-black text-gray-900 mb-2">
+        {featureLabel} Facilities in {regionName}
+      </h1>
+
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-gray-600">
+        <span class="font-semibold text-gray-900">
+          {facilitiesData.length} listings with {featureLabel}
+        </span>
+        <span class="text-gray-300">-</span>
+        <span class="text-gray-500">
+          Find public listings in {regionName}, including {featureLabel.toLowerCase()} options.
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Region Map Section -->
+  <div class="max-w-5xl mx-auto px-0 md:px-4 mt-4 mb-6">
+    <RegionMap
+      listings={facilitiesData}
+      centerLat={centerLat}
+      centerLng={centerLng}
+      stateSlug={stateSlug}
+    />
+  </div>
+
+  <!-- Feature Navigation Pills -->
+  <div class="max-w-5xl mx-auto px-4 mb-6">
+    <FeaturePills 
+      stateSlug={stateSlug} 
+      regionSlug={regionSlug}
+      currentFeature={kebabFeature} 
+    />
+  </div>
+
+  <!-- Listing Grid Section -->
+  <main class="max-w-5xl mx-auto px-4 pb-12">
+    {facilitiesData.length > 0 ? (
+      <section>
+        <h2 class="text-lg font-bold text-gray-900 mb-4">All {featureLabel} listings in {regionName}</h2>
+        <ul class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {facilitiesData.map((facility) => (
+            <ListingGridCard
+              key={facility.listing_id}
+              facility={facility}
+              featureKey={normalizedFeatureSnake}
+            />
+          ))}
+        </ul>
+      </section>
+    ) : (
+      <div class="text-center py-12">
+        <p class="text-gray-500 mb-4">No listings found with {featureLabel} in {regionName}.</p>
+        <p class="text-sm text-gray-400">
+          Try checking other regions or broadening your search.
+        </p>
+      </div>
+    )}
+  </main>
+</Layout>

@@ -1,0 +1,20 @@
+---
+// DataVersionBadge.astro - Displays data version like "Data: January 2025"
+// Props: version (e.g. '2025-01')
+
+interface Props {
+  version: string | null | undefined;
+}
+
+const { version } = Astro.props;
+
+const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+const displayDate = version 
+  ? (monthNames[parseInt(version.split('-')[1])] ?? '') + ' ' + version.split('-')[0]
+  : 'Unknown';
+---
+
+<span class="text-xs text-gray-500">
+  Data: {displayDate}
+</span>

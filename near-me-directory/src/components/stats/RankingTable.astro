@@ -1,0 +1,82 @@
+---
+// RankingTable.astro - Accessible HTML table with proper thead/tbody
+// Props: rows, columns, caption
+
+interface Props {
+  rows: any[];
+  columns: {
+    key: string;
+    label: string;
+    priority?: 'high' | 'medium' | 'low';
+    render?: (value: any, row: any) => any;
+    href?: (row: any) => string;
+  }[];
+  caption?: string;
+}
+
+const { rows, columns, caption } = Astro.props;
+
+// Pre-compute cell classes for each column
+const thClasses = columns.map(col => {
+  const base = "text-left py-2 px-3 text-sm font-semibold text-gray-700";
+  if (col.priority === 'low') return base + " hidden xs:table-cell";
+  if (col.priority === 'medium') return base + " hidden sm:table-cell";
+  return base;
+});
+
+const tdClasses = columns.map(col => {
+  const base = "py-2 px-3";
+  if (col.priority === 'low') return base + " hidden xs:table-cell";
+  if (col.priority === 'medium') return base + " hidden sm:table-cell";
+  return base;
+});
+---
+
+{#if caption}
+  <figcaption class="sr-only">{caption}</figcaption>
+{/if}
+<div class="overflow-x-auto">
+  <table class="w-full border-collapse">
+    <thead>
+      <tr class="border-b border-gray-200">
+        {#each thClasses as cls, i}
+          <th class={cls}>
+            {columns[i].label}
+          </th>
+        {/each}
+      </tr>
+    </thead>
+    <tbody>
+      {#each rows as row, index}
+        <tr class={index % 2 === 0 ? "border-b border-gray-100 hover:bg-gray-50 bg-white" : "border-b border-gray-100 hover:bg-gray-50 bg-gray-50/50"}>
+          {#each columns as col, i}
+            <td class={tdClasses[i]}>
+              {#if col.render}
+                {col.render(row[col.key], row)}
+              {:else if col.href && row[col.key]}
+                <a href={col.href(row)} class="text-amber-600 hover:text-amber-800 font-medium">
+                  {row[col.key]}
+                </a>
+              {:else}
+                {row[col.key] ?? '—'}
+              {/if}
+            </td>
+          {/each}
+        </tr>
+      {/each}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  @media (min-width: 480px) {
+    .xs\\:table-cell {
+      display: table-cell !important;
+    }
+  }
+  @media (min-width: 640px) {
+    .sm\\:table-cell {
+      display: table-cell !important;
+    }
+  }
+</style>

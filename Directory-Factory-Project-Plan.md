@@ -37,6 +37,26 @@ Phase 0 depends on them.
 || `NEW_DIRECTORY_FACTORY_PATH` | `/home/shanon/web-dev/directory-factory` | Python (see Tech Stack below) | Destination: the new unified system — confirmed by shanon 2026-08-03 |
 || `NEW_NEAR_ME_DIRECTORY_PATH` | `/home/shanon/web-dev/near-me-directory` | Astro/TypeScript (unchanged — see Tech Stack note) | Destination: the white-labeled Astro template repo — confirmed by shanon 2026-08-03 |
 
+--
+
+## 📄 Data Model Spec — authoritative D1 schema (READ BEFORE PHASES 2/4/5)
+
+`Data-Model-Spec.md` (same directory as this plan) is the single source of
+truth for every directory's Cloudflare D1 database shape. It was created
+2026-08-05 and overrides any Phase 2/4/5 decisions that conflict with it.
+**Read it in full before touching Phase 2, 4, or 5 code.**
+
+Key differences from the initial Phase 4 build (2026-08-05):
+- Schema has **9 tables**: `states`, `regions`, `suburbs`, `businesses`,
+  `business_features`, `business_hours`, `business_services`, `content`,
+  `site_config`
+- ~~`business_notes`~~ and ~~`enrichment_content`~~ are **removed** — not in spec
+- Geography hierarchy: state → region → suburb (states uses natural key `code`)
+- `content` table carries all EEAT text at every level (state/region/suburb/business)
+- `business_services` has pricing columns ready but **empty** for v1
+- Upload order: states → regions → suburbs → businesses → features/hours/services → content (content last)
+- `business_count` on geography tables is recomputed by the upload pass
+
 ---
 
 ## Architecture Decisions (confirmed)
@@ -94,7 +114,7 @@ is Python; everything in `NEW_NEAR_ME_DIRECTORY_PATH` stays Astro/TypeScript.
 |---|---|---|
 | CLI argument parsing | `argparse` | Standard library — no extra dependency |
 | Local database (runs log, and any per-project working data) | `sqlite3` | Standard library |
-| HTTP calls (Google Places, Gemini, Cloudflare API) | `requests` | Already implied by existing `httpx` use in dataset-collector — either is fine, prefer `httpx` since dataset-collector already depends on it |
+| HTTP calls (Google Places, Gemini, Cloudflare API) | `requests` | Already implied by existing `httpx` use in dataset-collector — either is fine. Phase 4 uses `requests` for Cloudflare D1 REST API. |
 | AI enrichment | `google-generativeai` | Already used in the plan for Phase 2 |
 | Phone number normalization | `phonenumbers` | Already specified in the old plan |
 | Slug generation | `python-slugify` | Already specified in the old plan |
@@ -321,6 +341,10 @@ scripts/cleaning_enrichment/
 | 2.5 | Write `enrichment.py` in Python using `google-generativeai`, generating: business description, services list, specialties, SEO keywords, SEO meta description — generic content types instead of toilet-specific EEAT categories. Function signature: `enrich_place(cleaned_record: dict) -> dict` | Done | VERIFIED: build_place_prompt + call_gemini structure confirmed. enrich_place returns dict with 5 content fields + ai_model + generated_at. 10/10 enrichment checks PASS. |
 | 2.6 | Read `OLD_TOILETSNEARME_DATA_PATH/generate-stats.js` for its composite-score approach, then add a `compute_quality_score(cleaned_record: dict, enriched_record: dict) -> int` function to `enrichment.py` | Done | VERIFIED: 4 composite functions ported (calc_accessibility_score, calc_family_score, calc_traveller_score, calc_provision_score) + compute_quality_score. 8/8 score checks PASS. |
 | 2.7 | Wrap `cleaning.py` and `enrichment.py` behind the standard script entry point from Phase 3 (see the `@script_main` pattern there) | Done | Added `__main__` blocks to both files with @script_main. `cleaning.py` reads raw_json from collector.db, writes cleaned_*.jsonl. `enrichment.py` reads cleaned JSONL, calls enrich_place() via Gemini (skip_ai supported), writes enriched_*.jsonl with quality scores. Both verified via runner end-to-end. |
+| 2.8 | **NEW (Data-Model-Spec.md):** Add geography resolution to cleaning — resolve suburb, region, state from `addressComponents` (locality → suburb, `administrative_area_level_2` → region, `administrative_area_level_1` → state_code). Write resolved geography rows to a sidecar JSONL alongside cleaned records for the upload stage (Phase 4). No spatial/shapefile logic. | In Progress | Per Data-Model-Spec.md §"Geography model": region is `administrative_area_level_2` from Places API addressComponents. `region_id` on suburbs/businesses is nullable. |
+| 2.9 | **NEW (Data-Model-Spec.md):** Add geography-level EEAT content generation — for every state/region/suburb with ≥1 business, generate `about`/`local_context`/`faq`/`meta_title`/`meta_description` content rows (same content_type values as business-level, adapted to geographic context). Written to `content` table, not as columns on geography tables. | Not Started | Per Data-Model-Spec.md §"Content model": content_type values include `local_context` only at state/region/suburb level. Uses `{{state_name}}`/`{{region_name}}`/`{{suburb_name}}`/`{{niche_label}}`/`{{business_count}}` placeholders. |
+| 2.10 | **NEW (Data-Model-Spec.md):** Add `business_services` extraction to enrichment — AI-extract service names only (e.g. "Nail Trimming"), leave pricing fields null. Written to `business_services` table, not as a column on `businesses`. | Not Started | Per Data-Model-Spec.md §"Field origin map": business_services (name only) filled by Phase 2 Enrichment. |
+| 2.11 | **NEW (Data-Model-Spec.md):** Update business-level enrichment to write `content` table rows (`about`, `faq`, `tips`, `meta_title`, `meta_description`, `seo_keywords`) with `entity_type='business'` — instead of embedding in the enriched JSONL `enrichment` dict. | Not Started | Per Data-Model-Spec.md: "description / meta_description / seo_keywords are NOT columns here — that text lives in the `content` table". `word_count` column must be computed in Python (`len(body.split())`). |
 
 ## Test Process
 
@@ -369,6 +393,10 @@ scripts/cleaning_enrichment/
 - `clean_place()` returns a dict with keys: `name`, `slug`, `locality`, `state_code`, `postal_code`, `lat`, `lng`, `quality_score`, `hours_rows`, `feature_keys`
 - `compute_quality_score()` returns an integer in 0–100 range
 - `build_place_prompt()` returns a non-empty string containing the business name
+- `clean_place()` returns a dict with geography fields: `state_code`, plus resolved `region_name` and `suburb_name` from addressComponents
+- `clean_place()` output includes resolved geography rows (state, region, suburb) for Phase 4 upload
+- Enrichment produces `content` table rows (`about`, `faq`, `tips`, `meta_title`, `meta_description`, `seo_keywords`) for both business-level and geography-level entities
+- `business_services` extraction returns service names only (pricing fields left null)
 - Cleaning script reads `raw_json` from `collector.db`, writes `cleaned_*.jsonl`
 - Enrichment script reads `cleaned_*.jsonl`, writes `enriched_*.jsonl` with quality scores
 - Both runs logged to `runs.db` with `status=success`
@@ -621,38 +649,39 @@ to a directory's own D1 database.
 
 | ID | Task | Status | Notes |
 |---|---|---|---|
-| 4.1 | Build D1 schema DDL: `businesses`, `business_features`, `business_hours`, `business_notes`, `site_config` | Done | 2026-08-05. Created `scripts/deploy/d1_schema.sql` with 6 tables + `enrichment_content` for AI-generated content. Schema modeled on existing Supabase tables (db.ts) — `businesses` (was `toilets`), `business_features` (was `features`), `business_hours` (was `hours`), `business_notes` (was `notes`), `site_config` (key/value branding). |
-| 4.2 | Build `scripts/deploy/d1_upload.py` (or similar) — batch upsert, per-directory D1 credentials passed as params | Done | 2026-08-05. Creates `d1_upload.py` with `d1_execute()` REST client to Cloudflare D1 API, `build_business_upsert_sql()` (INSERT...ON CONFLICT DO UPDATE), batch inserts for features/hours/notes/enrichment. Reads `data/enriched_<pid>.jsonl`. |
-| 4.3 | Wrap behind the standard script contract (Phase 3) | Done | 2026-08-05. Uses `@script_main` decorator from `runner/contract.py`. Registered as `upload.d1` in `runner/run.py` SCRIPT_MAP. Runnable via `python runner/run.py upload.d1 --project-id=N --params='{...}'`. |
-| 4.4 | Test against one directory's cleaned/enriched data | Done | 2026-08-05. Verified: dry-run with 1 enriched record (test project 42) reports correct counts (1 business, 1 feature, 1 hour, 1 note, 1 enrichment). Error cases tested: missing params (ValueError), missing enriched file (FileNotFoundError), missing API token (RuntimeError). Non-dry-run path correctly fails on missing token. SQL generation verified correct. |
+| 4.1 | Build D1 schema DDL: `businesses`, `business_features`, `business_hours`, `business_notes`, `site_config` | Done | ~~REWRITTEN~~ 2026-08-05. Created initial `scripts/deploy/d1_schema.sql` with 6 tables. **Overridden by `Data-Model-Spec.md` (2026-08-05):** must use exact DDL from spec. Schema now: `states`, `regions`, `suburbs`, `businesses`, `business_features`, `business_hours`, `business_services`, `content`, `site_config` (9 tables). Removed `business_notes` and `enrichment_content` (not in spec). `site_config` enhanced with `value_type`/`config_group`/`is_public` columns. |
+| 4.2 | Build `scripts/deploy/d1_upload.py` (or similar) — batch upsert, per-directory D1 credentials passed as params | Done | ~~NEEDS REWRITE~~ 2026-08-05. Initial `d1_upload.py` created with `d1_execute()` REST client + `build_business_upsert_sql()`. **Must be updated to match Data-Model-Spec.md:** upload order is states → regions → suburbs → businesses → business_features/business_hours/business_services → content (content last). Must recompute `business_count` on states/regions/suburbs. Must handle `content` table writes with `word_count` computed in Python. Must support placeholder substitution config in params. |
+| 4.3 | Wrap behind the standard script contract (Phase 3) | Done | 2026-08-05. Uses `@script_main` decorator from `runner/contract.py`. Registered as `upload.d1` in `runner/run.py` SCRIPT_MAP. Runnable via `python runner/run.py upload.d1 --project-id=N --params='{...}'`. Interface unchanged — only internal SQL/upload-order logic needs updating. |
+| 4.4 | Test against one directory's cleaned/enriched data | Blocked | Test cases from initial run (dry-run, missing params, missing file, missing token) still valid. **Must re-verify after rewriting d1_upload.py + schema** to confirm: 6-level upload order correct, business_count recomputed, content rows written with word_count, geography resolution writes states/regions/suburbs. |
+| 4.5 | **NEW (Data-Model-Spec.md):** Update `d1_upload.py` and `d1_schema.sql` to match spec exactly — replace old schema, fix upload order, add business_count recompute, add content table support | In Progress | The initial Phase 4 build (2026-08-05) used Supabase tables as the schema source. `Data-Model-Spec.md` is now the authoritative schema. Phase 4 code must be updated to match. |
 
 ## Test Process
 
 ### Prerequisites
-- D1 schema DDL file exists at `scripts/deploy/d1_schema.sql`
-- `d1_upload.py` exists at `scripts/deploy/d1_upload.py`
-- An enriched JSONL file exists at `data/enriched_<project_id>.jsonl` (create one via Phase 2 cleaning + enrichment pipeline, or use a test record)
+- D1 schema DDL file exists at `scripts/deploy/d1_schema.sql` (now uses Data-Model-Spec.md exact DDL)
+- `d1_upload.py` exists at `scripts/deploy/d1_upload.py` (updated to match spec)
+- An enriched JSONL file exists at `data/enriched_<project_id>.jsonl` (with geography resolution from Phase 2.8)
 
 ### Steps
-1. **Test schema DDL loads and has all required tables:**
+1. **Test schema DDL matches Data-Model-Spec.md exactly:**
    ```bash
    cd /home/shanon/web-dev/directory-factory
    source .venv/bin/activate
    python3 -c "
    schema = open('scripts/deploy/d1_schema.sql').read()
-   for t in ['site_config', 'businesses', 'business_features', 'business_hours', 'business_notes', 'enrichment_content']:
-       assert f'CREATE TABLE' in schema and t in schema, f'Missing table: {t}'
-   print('All 6 tables present in schema')
+   for t in ['states','regions','suburbs','businesses','business_features','business_hours','business_services','content','site_config']:
+       assert t in schema, f'Missing table: {t}'
+   assert 'business_notes' not in schema, 'business_notes should NOT be in schema (removed by spec)'
+   assert 'enrichment_content' not in schema, 'enrichment_content should NOT be in schema (removed by spec)'
+   print('Schema matches Data-Model-Spec.md: 9 tables present, removed tables absent')
    "
    ```
 2. **Test dry-run upload (no real Cloudflare creds needed):**
    ```bash
-   # Create a test enriched record if none exists:
-   echo '{"slug":"test-business","name":"Test Business","feature_keys":[{"feature_key":"accessible","source":"types"}],"notes":[{"note_type":"editorial","note":"A test business"}],"hours_rows":[{"day_of_week":1,"open_mins":540,"close_mins":1080,"parse_status":"parsed"}],"enrichment":{"description":"A test business.","services":["Service 1"],"specialties":["Specialty"],"seo_keywords":["keyword1"],"seo_meta_desc":"Meta description.","ai_model":"gemini-2.5-flash","generated_at":"2026-01-01T00:00:00"}}' > data/enriched_42.jsonl
-
+   echo '{"slug":"test-groomer","name":"Test Groomer","state_code":"QLD","region":"Brisbane","suburb":"West End","lat":-27.47,"lng":153.0,"feature_keys":["grooming"],"hours_rows":[{"day_of_week":1,"open_mins":540,"close_mins":1080}],"services":["Haircut"]}' > data/enriched_42.jsonl
    python runner/run.py upload.d1 --project-id=42 \
-     --params='{"d1_account_id":"test_account","d1_database_id":"test_db_uuid","site_name":"Test Directory","dry_run":true}'
-   # Should return status=success with counts showing 1 business, 1 feature, 1 hour, 1 note, 1 enrichment
+     --params='{"d1_account_id":"test","d1_database_id":"db","site_name":"Test Directory","dry_run":true}'
+   # Should return status=success with 9-level upload plan (states, regions, suburbs, businesses, features, hours, services, content, counts recompute)
    ```
 3. **Test missing params error:**
    ```bash
@@ -667,31 +696,19 @@ to a directory's own D1 database.
    ```
 5. **Test missing API token (non-dry-run):**
    ```bash
-   # Ensure CLOUDFLARE_API_TOKEN is not set:
    unset CLOUDFLARE_API_TOKEN
    python scripts/deploy/d1_upload.py --project-id=42 \
      --params='{"d1_account_id":"x","d1_database_id":"y","site_name":"T"}'
    # Should return status=error, error="No Cloudflare API token available..."
    ```
-6. **Verify generated SQL is correct (ad-hoc):**
-   ```bash
-   python3 -c "
-   from scripts.deploy.d1_upload import build_business_upsert_sql, sql_str
-   record = {'slug':'test-biz','name':'Test Biz'}
-   sql = build_business_upsert_sql(record)
-   assert 'ON CONFLICT(slug) DO UPDATE SET' in sql
-   assert 'INSERT INTO businesses' in sql
-   print('SQL generation OK')
-   "
-   ```
 
 ### Expected Results
-- All 6 tables present in `d1_schema.sql` (site_config, businesses, business_features, business_hours, business_notes, enrichment_content)
-- Dry-run returns `status=success` with correct counts (1 business, 1 feature, 1 hour, 1 note, 1 enrichment for the test record)
-- Missing params → `status=error` with clear ValueError message
-- Missing enriched file → `status=error` with FileNotFoundError message
-- Missing API token (non-dry-run) → `status=error` with RuntimeError message
-- `build_business_upsert_sql()` produces valid `INSERT ... ON CONFLICT(slug) DO UPDATE SET` syntax
+- Schema has all 9 tables from Data-Model-Spec.md (states, regions, suburbs, businesses, business_features, business_hours, business_services, content, site_config)
+- Schema does NOT have `business_notes` or `enrichment_content` (removed by spec)
+- Dry-run returns `status=success` with correct 9-level upload counts
+- Missing params → `status=error` with ValueError
+- Missing enriched file → `status=error` with FileNotFoundError
+- Missing API token → `status=error` with RuntimeError
 
 ---
 
@@ -714,6 +731,9 @@ site deploys from.
 | 5.6 | Route legal pages (privacy/terms/contact) to pull copy from `site_config` | Not Started | |
 | 5.7 | Push to a new GitHub repo | Not Started | |
 | 5.8 | Manual local test: point the template at one real D1 database and confirm it renders correctly | Not Started | |
+| 5.9 | **NEW (Data-Model-Spec.md):** Implement routes `[state]/[region]/index.astro`, `[state]/[region]/[suburb]/index.astro`, `[state]/[region]/[suburb]/[business].astro` | Not Started | Per Data-Model-Spec.md §"What this means for each phase": routes use slug chain, NOT flat `/[slug].astro` pattern. |
+| 5.10 | **NEW (Data-Model-Spec.md):** Every page loads EEAT content from `content` table and renders `{{placeholder}}` substitution (`{{business_count}}`, `{{state_name}}`, `{{region_name}}`, `{{suburb_name}}`, `{{niche_label}}`, `{{avg_rating}}`) at build time | Not Started | Per spec: content rows have placeholders that stay in DB text and get replaced at render time. `word_count` computed in Python, stored as column. |
+| 5.11 | **NEW (Data-Model-Spec.md):** Implement slug→id resolution pattern on every page — resolve top-down once (state by `code`, region by `(slug, state_code)`, suburb by `(slug, state_code)`, business by `(slug, suburb_id)`), then join on integer ids | Not Started | Per spec §"Naming & ID Conventions": this is the single lookup pattern to use everywhere. Avoid string-based joins after the initial resolution. |
 
 ---
 

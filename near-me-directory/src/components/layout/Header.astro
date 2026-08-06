@@ -1,0 +1,45 @@
+---
+// Header.astro - Config-driven header with logo and search bar
+// Branding (site name, logo) comes from site_config loaded via D1
+
+import Icon from '../ui/Icon.astro';
+import { loadSiteConfig } from '../../lib/site-config';
+
+const config = await loadSiteConfig();
+---
+
+<header class="relative z-[1100] flex items-center gap-3 px-4 py-2.5 bg-white border-b border-gray-200 shadow-sm">
+  <a href="/" class="shrink-0 flex items-center gap-2.5 no-underline" aria-label={config.site_name} title="Find facilities near me">
+    <div class={`w-9 h-9 rounded-xl flex items-center justify-center shadow-sm ${config.primary_color ? 'shadow-blue-200' : ''} shrink-0`}>
+      {config.logo_svg ? (
+        <span set:html={config.logo_svg} />
+      ) : (
+        <span class={`text-white font-black text-base leading-none select-none`} style={`background:${config.primary_color}`}>
+          {config.logo_initial || config.site_name.charAt(0)}
+        </span>
+      )}
+    </div>
+    <div class="flex flex-col leading-tight select-none">
+      <span class="text-xs font-black text-gray-900 tracking-tight">{config.site_name}</span>
+      <span class="text-xs font-black text-blue-600 tracking-tight">Near Me</span>
+    </div>
+  </a>
+  <!-- Search bar - visible on ALL screen sizes -->
+  <div class="relative flex-1 min-w-0" data-search-container>
+    <div class="relative flex items-center">
+      <Icon name="search" width={15} height={15} class="absolute left-3.5 text-gray-400 pointer-events-none" />
+      <input type="search" role="combobox" aria-expanded="false" aria-autocomplete="list" placeholder="Search suburb, region or facility name" autoComplete="off" spellcheck="false" data-search-input class="w-full pl-10 pr-9 py-2.5 text-sm bg-white border border-gray-200 rounded-2xl shadow-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-400 transition-all" />
+    </div>
+    <!-- Search Dropdown - must be inside search container for correct positioning -->
+    <div id="search-dropdown" class="absolute top-full left-0 right-0 mt-1.5 bg-white border border-gray-200 rounded-2xl shadow-xl z-[9999] overflow-hidden max-h-72 overflow-y-auto hidden" data-search-dropdown>
+      <div data-search-loading class="p-4 text-center hidden">
+        <div class="inline-block w-4 h-4 border-2 border-gray-200 border-t-blue-600 rounded-full animate-spin"></div>
+      </div>
+      <div data-search-empty class="p-4 text-center text-sm text-gray-500 hidden">No results found</div>
+      <ul data-search-results class="py-1"></ul>
+    </div>
+  </div>
+  <a href="/stats" class="p-1 md:p-2 text-sm" aria-label={config.header_nav_stats_label} title={config.header_nav_stats_title}>
+    <Icon name="chartcolumn" width={15} height={15} class="" />
+  </a>
+</header>

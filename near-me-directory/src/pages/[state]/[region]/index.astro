@@ -1,0 +1,186 @@
+---
+// src/pages/[state]/[region]/index.astro - Region directory page (SSR)
+// Icons migrated to Lucide (2026-06-15)
+// Refactored to use component-driven architecture matching Next.js reference
+import Layout from '../../../layouts/Layout.astro';
+import RegionMap from '../../../components/directory/RegionMap.astro';
+import EeatContent from '../../../components/eeat/EeatContent.astro';
+import FeaturePills from '../../../components/directory/FeaturePills.astro';
+import Icon from '../../../components/ui/Icon.astro';
+import { fetchRegionData, fetchContent, fetchRegionFeatureCounts, fetchRegionListings } from '../../../lib/db';
+import { getRegionMetadata } from '../../../lib/utils/seo';
+import { loadSiteConfig } from '../../../lib/site-config';
+const siteConfig = await loadSiteConfig();
+import { buildBreadcrumbSchema, buildRegionSchema, serializeSchema } from '../../../lib/utils/schema';
+import { resolveContent, regionValues } from '../../../lib/content-utils';
+
+const { state, region } = Astro.params;
+
+// Validate required params
+if (!state || !region) {
+  return Astro.redirect('/');
+}
+
+const stateCode = state.toUpperCase();
+const stateSlug = state.toLowerCase();
+
+// Fetch all data via the database utility
+const regionData = await fetchRegionData(state, region);
+
+// Destructure fetched data
+const { state: stateRecord, region: regionRecord, suburbs, stateSlug: fetchedStateSlug } = regionData;
+
+// Redirect if not found
+if (!stateRecord || !regionRecord) {
+  return Astro.redirect('/');
+}
+
+// Fetch content, feature counts, and listings in parallel
+const [contentRows, featureCounts, regionFacilities] = await Promise.all([
+  fetchContent('region', `${region}-${stateSlug}`),
+  fetchRegionFeatureCounts(region, stateCode),
+  fetchRegionListings(stateCode, region),
+]);
+
+// Resolve EEAT content with placeholder replacement
+const content = resolveContent(contentRows, regionValues(regionRecord, stateRecord, featureCounts));
+
+// Build breadcrumbs for schema
+const breadcrumbs = [
+  { label: 'Home', href: '/' },
+  { label: stateRecord.name, href: `/${stateSlug}` },
+  { label: regionRecord.name_clean ?? regionRecord.name, href: `/${stateSlug}/${region}` },
+];
+
+// Build map center based on first suburb or fallback
+const STATE_CENTRES: Record<string, { lat: number; lng: number }> = {
+  QLD: { lat: -27.5, lng: 153.0 },
+  NSW: { lat: -33.9, lng: 151.2 },
+  VIC: { lat: -37.8, lng: 145.0 },
+  WA:  { lat: -31.9, lng: 115.9 },
+  SA:  { lat: -34.9, lng: 138.6 },
+  TAS: { lat: -42.9, lng: 147.3 },
+  ACT: { lat: -35.3, lng: 149.1 },
+  NT:  { lat: -12.5, lng: 130.8 },
+};
+const fallback = STATE_CENTRES[stateRecord.code] ?? { lat: -27.5, lng: 133.8 };
+const firstSub = suburbs[0];
+const centerLat = firstSub?.latitude ?? fallback.lat;
+const centerLng = firstSub?.longitude ?? fallback.lng;
+
+// Build schema objects
+const breadcrumbSchema = buildBreadcrumbSchema(breadcrumbs);
+const regionJsonLd = buildRegionSchema(stateRecord.code, regionRecord);
+
+// Get SEO metadata
+const metadata = getRegionMetadata(stateRecord.code, regionRecord, siteConfig);
+---
+
+<Layout metadata={metadata}>
+  {/* Structured Data */}
+  <script type="application/ld+json" set:html={serializeSchema(breadcrumbSchema)} />
+  <script type="application/ld+json" set:html={serializeSchema(regionJsonLd)} />
+
+  <!-- Region Header Section -->
+  <div class="bg-white border-b border-gray-100">
+    <div class="max-w-5xl mx-auto px-4 py-5">
+      <!-- Breadcrumb -->
+      <nav aria-label="Breadcrumb" class="mb-3">
+        <ol class="flex items-center gap-1 flex-wrap text-xs text-gray-400">
+          {breadcrumbs.map((item, i) => {
+            const isLast = i === breadcrumbs.length - 1;
+            return (
+              <li class="flex items-center gap-1 min-w-0">
+                {i > 0 && <Icon name="chevronRight" size={14} class="text-gray-300 shrink-0" />}
+                {isLast ? (
+                  <span class="text-gray-600 font-medium truncate">{item.label}</span>
+                ) : (
+                  <a href={item.href} class="hover:text-blue-600 transition-colors truncate">
+                    {item.label}
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+
+      <h1 class="text-2xl font-black text-gray-900 mb-2">
+        Public Facilities in {regionRecord.name_clean ?? regionRecord.name}
+      </h1>
+      <!-- Summary line -- count + suburbs -->
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-gray-600">
+        <span class="font-semibold text-gray-900">
+          {regionRecord.listing_count?.toLocaleString() ?? '0'} public listings
+        </span>
+        <span class="text-gray-300">- </span>
+        <span>{suburbs.length} suburbs</span>
+        <span class="text-gray-300">- </span>
+        <span class="text-gray-500">
+          Find public listings in {regionRecord.name_clean ?? regionRecord.name}, including open now and accessible options.
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Region Map Section -->
+  <div class="max-w-5xl mx-auto px-0 md:px-4 mt-4 mb-6">
+    <RegionMap
+      listings={regionFacilities}
+      centerLat={centerLat}
+      centerLng={centerLng}
+      stateSlug={stateSlug}
+    />
+  </div>
+
+  <!-- Feature Navigation Pills -->
+  <div class="max-w-5xl mx-auto px-4 mb-6">
+    <FeaturePills stateSlug={stateSlug} regionSlug={region} />
+  </div>
+
+  <!-- Main Content -->
+  <main class="max-w-5xl mx-auto px-4 pb-12">
+    {/* Suburb Grid Section */}
+    <section class="mb-10">
+      <h2 class="text-lg font-bold text-gray-900 mb-1">Browse by suburb</h2>
+      <p class="text-sm text-gray-500 mb-4">
+        Select a suburb to see all listings and directions.
+      </p>
+      <ul class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {suburbs.map((suburb) => (
+          <li key={suburb.id}>
+            <a
+              href={`/${stateSlug}/${region}/${suburb.slug}`}
+              class="flex items-center justify-between p-4 rounded-xl border border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition-colors group"
+            >
+              <span class="font-medium text-gray-900 group-hover:text-blue-700">
+                {suburb.name}
+              </span>
+              <span class="text-sm text-gray-400 group-hover:text-blue-500">
+                {suburb.listing_count} facility{suburb.listing_count !== 1 ? 's' : ''}
+              </span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    {/* Looking in different area section */}
+    <section class="mb-10 p-4 rounded-xl bg-gray-50 border border-gray-200">
+      <p class="text-sm text-gray-600 mb-2">Looking in a different area?</p>
+      <a
+        href={`/${stateSlug}`}
+        class="inline-flex items-center gap-1.5 text-sm font-semibold text-blue-700 hover:text-blue-800 transition-colors"
+      >
+        <Icon name="chevronRight" width={14} height={14} />
+        View all public listings in {stateRecord.name}
+      </a>
+    </section>
+
+    {/* EEAT Content */}
+    <EeatContent
+      content={content}
+      locationName={regionRecord.name_clean ?? regionRecord.name}
+    />
+  </main>
+</Layout>

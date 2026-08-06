@@ -1,0 +1,204 @@
+---
+// SuburbMap.astro - Static map component for suburb pages
+// Uses Leaflet + CARTO tiles with multi-marker clustering
+// Designed for SSR - hydration happens on client with vanilla JS
+interface Props {
+  suburbName: string;
+  listings: Array<{
+    listing_id: string;
+    slug: string;
+    name: string;
+    address?: string;
+    latitude: number;
+    longitude: number;
+    is_open_24h: boolean;
+    region_slug?: string;
+    suburb_slug?: string;
+    state_code?: string;
+  }>;
+  suburbLat?: number;
+  suburbLng?: number;
+  stateSlug: string;
+}
+
+const { suburbName, listings, suburbLat, suburbLng, stateSlug } = Astro.props;
+
+// Only render map if we have listings with coordinates
+const hasFacilities = listings.some(t => t.latitude && t.longitude);
+
+// Generate facility markers JSON for client-side hydration
+const listingMarkers = hasFacilities ? JSON.stringify(listings.map(t => ({
+  id: t.listing_id,
+  slug: t.slug,
+  name: t.name,
+  address: t.address,
+  lat: t.latitude,
+  lng: t.longitude,
+  isOpen24h: t.is_open_24h,
+  region: t.region_slug,
+  suburb: t.suburb_slug,
+  state: t.state_code
+}))) : '[]';
+
+// Unique map container ID
+const mapContainerId = 'suburb-map-' + Math.random().toString(36).slice(2, 9);
+---
+
+{hasFacilities && (
+  <div class="w-full rounded-none md:rounded-2xl overflow-hidden border-0 md:border border-gray-200 shadow-none md:shadow-sm relative" data-suburb-map data-listings={listingMarkers} data-state={stateSlug}>
+    <!-- Map container -->
+    <div id={mapContainerId} class="w-full h-[340px] md:h-[480px]"></div>
+
+    <!-- Mobile "Find listings near me" pill -->
+    <div class="md:hidden absolute bottom-4 left-1/2 -translate-x-1/2 z-[800]">
+      <a href="/" class="inline-flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 shadow-lg rounded-full text-sm font-bold text-gray-700 hover:bg-gray-50 transition-colors whitespace-nowrap">
+        Find listings near me
+      </a>
+    </div>
+  </div>
+)}</script>
+
+<style is:global>
+  /* Leaflet popup overrides matching Next.js styles */
+  .nm-popup .leaflet-popup-content-wrapper {
+    border-radius: 16px !important;
+    padding: 0 !important;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.14) !important;
+    border: 1px solid #e5e7eb !important;
+    overflow: hidden;
+    min-width: 240px;
+    max-width: 280px;
+  }
+  .nm-popup .leaflet-popup-content {
+    margin: 0 !important;
+    width: 100% !important;
+  }
+  .nm-popup .leaflet-popup-tip-container { display: none !important; }
+  .nm-popup .leaflet-popup-close-button {
+    top: 12px !important; right: 12px !important;
+    font-size: 20px !important; font-weight: 300 !important;
+    color: #9ca3af !important; background: none !important;
+    width: 24px !important; height: 24px !important; line-height: 24px !important;
+  }
+  .nm-popup .leaflet-popup-close-button:hover { color: #4b5563 !important; }
+  .nm-marker, .marker-cluster {
+    background: none !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+</style>
+
+<script is:inline>
+// SuburbMap - Vanilla JS Leaflet map initialization with marker clustering
+(function() {
+  // Wait for Leaflet and markercluster to be available
+  const waitForLeaflet = (callback) => {
+    if (typeof L !== 'undefined' && typeof L.MarkerClusterGroup !== 'undefined') {
+      callback();
+    } else {
+      setTimeout(() => waitForLeaflet(callback), 50);
+    }
+  };
+
+  const initSuburbMaps = () => {
+    document.querySelectorAll('[data-suburb-map]').forEach(function(el) {
+      const listings = JSON.parse(el.getAttribute('data-listings') || '[]');
+      // el is the wrapper div, child div has the id
+      const mapContainer = el.querySelector('div');
+
+      if (!mapContainer || listings.length === 0) return;
+
+      const map = L.map(mapContainer.id, {
+        center: [listings[0].lat, listings[0].lng],
+        zoom: 14,
+        zoomControl: false,
+        attributionControl: false
+      });
+
+      // CARTO tiles
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap &copy; CARTO',
+        subdomains: 'abcd',
+        maxZoom: 20
+      }).addTo(map);
+
+      L.control.attribution({ position: 'bottomleft', prefix: false }).addTo(map);
+      L.control.zoom({ position: 'topright' }).addTo(map);
+
+      // Chevron right icon SVG for popup buttons
+      const CHEVRON_RIGHT = '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg>';
+
+      // Create custom cluster icon matching homepage style
+      function createClusterIcon(cluster) {
+        const count = cluster.getChildCount();
+        const size = count < 10 ? 34 : count < 50 ? 40 : 46;
+        const lineHeight = Math.round(size - 5);
+        return L.divIcon({
+          html: '<div style="width:'+size+'px;height:'+size+'px;background:#1d4ed8;border-radius:50%;border:2.5px solid #fff;line-height:'+lineHeight+'px;text-align:center;font-weight:700;font-size:12px;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,0.25);font-family:system-ui,sans-serif;">'+count+'</div>',
+          className: 'nm-cluster',
+          iconSize: [size, size],
+          iconAnchor: [size/2, size/2]
+        });
+      }
+
+      // Create markers with clustering - using custom cluster icons
+      const cluster = L.markerClusterGroup({
+        maxClusterRadius: 45,
+        showCoverageOnHover: false,
+        disableClusteringAtZoom: 17,
+        spiderfyOnMaxZoom: true,
+        iconCreateFunction: createClusterIcon
+      }).addTo(map);
+
+      const validFacilities = listings.filter(t => t.lat && t.lng);
+
+      validFacilities.forEach(function(facility) {
+        const icon = L.divIcon({
+          html: '<div style="width:22px;height:22px;background:#1d4ed8;border-radius:50%;border:2.5px solid #fff;line-height:17px;text-align:center;font-weight:900;font-size:11px;color:#fff;box-shadow:0 2px 6px rgba(0,0,0,0.28);font-family:system-ui,sans-serif;cursor:pointer;">T</div>',
+          className: 'nm-marker',
+          iconSize: [22, 22],
+          iconAnchor: [11, 11]
+        });
+
+        const marker = L.marker([facility.lat, facility.lng], { icon });
+
+        const stateSlug = el.getAttribute('data-state') || '';
+        const url = facility.region && facility.suburb && stateSlug
+          ? '/' + stateSlug + '/' + facility.region + '/' + facility.suburb + '/' + facility.slug
+          : null;
+
+        let popupHtml = '<div style="padding:16px;">';
+        popupHtml += '<div style="font-size:15px;font-weight:800;color:#111827;line-height:1.2;margin-bottom:4px;padding-right:24px;">' + facility.name + '</div>';
+        if (facility.address) {
+          popupHtml += '<div style="font-size:12px;color:#6b7280;line-height:1.4;margin-bottom:12px;">' + facility.address + '</div>';
+        }
+        if (facility.isOpen24h) {
+          popupHtml += '<span style="display:inline-block;font-size:11px;font-weight:600;color:#15803c;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:9999px;padding:2px 10px;margin-bottom:12px;">Open 24 hrs</span>';
+        }
+        popupHtml += '<a href="' + (url || 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(facility.name)) + '" ' + (!url ? 'target="_blank" rel="noopener noreferrer" ' : '') + 'style="display:flex;align-items:center;justify-content:center;width:100%;height:44px;background:#1d4ed8;color:#fff;font-size:14px;font-weight:700;border-radius:12px;text-decoration:none;transition:background 0.2s;" onmouseover="this.style.background=\'#1d4ed8\'" onmouseout="this.style.background=\'#1d4ed8\'">' + (url ? 'View details' + CHEVRON_RIGHT : 'View details and Directions' + CHEVRON_RIGHT) + '</a></div>';
+
+        marker.bindPopup(L.popup({
+          closeButton: true,
+          className: 'nm-popup',
+          maxWidth: 300,
+          autoPanPadding: [20, 20]
+        }).setContent(popupHtml));
+
+        cluster.addLayer(marker);
+      });
+
+      // Fit bounds to all markers
+      if (validFacilities.length > 0) {
+        const group = new L.featureGroup(cluster.getLayers());
+        map.fitBounds(group.getBounds().pad(0.1));
+      }
+    });
+  };
+
+  if (document.readyState === 'complete') {
+    waitForLeaflet(initSuburbMaps);
+  } else {
+    window.addEventListener('load', () => waitForLeaflet(initSuburbMaps));
+  }
+})();
+</script>

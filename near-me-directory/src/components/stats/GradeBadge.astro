@@ -1,0 +1,22 @@
+---
+// GradeBadge.astro - A/B/C grade badge with appropriate colors
+// Props: grade (A/B/C or string), large (optional boolean for bigger badge)
+
+interface Props {
+  grade: string;
+  large?: boolean;
+}
+
+const { grade, large } = Astro.props;
+
+const gradeColors: Record<string, string> = {
+  'A': 'bg-green-100 text-green-800',
+  'B': 'bg-amber-100 text-amber-800',
+  'C': 'bg-red-100 text-red-800',
+};
+
+const colorClass = gradeColors[grade] || 'bg-gray-100 text-gray-800';
+const sizeClass = large ? 'px-3 py-1 text-sm' : 'px-2 py-1 text-xs';
+---
+
+<span class={"font-bold rounded " + sizeClass + " " + colorClass}>{grade}</span>

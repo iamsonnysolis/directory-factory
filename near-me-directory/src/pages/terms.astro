@@ -1,0 +1,33 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { loadSiteConfig } from '../lib/site-config';
+import { getTermsMetadata } from '../lib/utils/seo';
+
+const config = await loadSiteConfig();
+const metadata = getTermsMetadata(config);
+
+// Pull legal copy from site_config
+const termsContent = config.legal_terms || {
+  last_updated: 'May 2026',
+  sections: [
+    { title: 'Use of This Website', body: 'This website is provided "as is" for informational purposes only. While we strive for accuracy, we cannot guarantee that all facility locations and details are current or correct.' },
+    { title: 'Data Accuracy', body: 'Listing data is sourced from publicly available datasets and may be incomplete or outdated. Always verify facility availability before visiting.' },
+    { title: 'Limitation of Liability', body: 'We are not liable for any inconvenience, damage, or loss resulting from reliance on information provided on this website.' },
+    { title: 'Modifications', body: 'We reserve the right to modify these terms at any time. Continued use of the website constitutes acceptance of any changes.' },
+  ],
+};
+---
+
+<Layout metadata={metadata}>
+  <article class="prose prose-gray max-w-3xl mx-auto">
+    <h1>Terms of Use</h1>
+    <p>Last updated: {termsContent.last_updated}</p>
+
+    {termsContent.sections.map((section) => (
+      <>
+        <h2>{section.title}</h2>
+        <p set:html={section.body}></p>
+      </>
+    ))}
+  </article>
+</Layout>

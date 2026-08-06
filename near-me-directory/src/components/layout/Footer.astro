@@ -1,0 +1,35 @@
+---
+// Footer.astro - Config-driven footer with logo, nav links, and credit
+// Site name and copyright come from site_config loaded via D1
+
+import { loadSiteConfig } from '../../lib/site-config';
+
+const config = await loadSiteConfig();
+
+// Build the copyright text with current year
+const footerCopyright = (config.footer_copyright || '&copy; {{year}} {brand}')
+  .replace('{{year}}', new Date().getFullYear().toString())
+  .replace('{brand}', config.footer_brand_text || config.site_name);
+---
+
+<footer class="bg-white border-t border-gray-100 mt-auto">
+  <div class="w-full max-w-5xl mx-auto px-6 py-5 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-400">
+    <div class="flex items-center gap-2">
+      <div class={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0`}>
+        <span class="text-white font-black text-xs leading-none">{config.logo_initial || config.site_name.charAt(0)}</span>
+      </div>
+      <span class="font-semibold text-gray-600 py-3">{config.footer_brand_text || config.site_name}</span>
+    </div>
+    <nav class="flex items-center gap-5 flex-wrap justify-center">
+      <a href="/" class="hover:text-blue-600 transition-colors py-3">{config.footer_find_label}</a>
+      <a href="/qld" class="hover:text-blue-600 transition-colors py-3">Queensland</a>
+      <a href="/nsw" class="hover:text-blue-600 transition-colors py-3">NSW</a>
+      <a href="/vic" class="hover:text-blue-600 transition-colors py-3">Victoria</a>
+      <a href="/wa" class="hover:text-blue-600 transition-colors py-3">WA</a>
+      <span class="mx-1.5 hidden md:block">!</span>
+      <a href="/stats" class="hover:text-blue-600 transition-colors py-3" title="Facilities Statistics">{config.footer_stats_label}</a>
+    </nav>
+    <p class="text-xs text-center sm:text-right py-3" set:html={footerCopyright}>
+    </p>
+  </div>
+</footer>

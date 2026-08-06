@@ -1,0 +1,10 @@
+dist/
+node_modules/
+.astro/
+.env
+*.backup
+# Large binary files that shouldn't be committed
+*.wasm
+workerd
+*.map
+.DS_Store

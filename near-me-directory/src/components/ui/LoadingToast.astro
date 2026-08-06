@@ -1,0 +1,27 @@
+---
+// LoadingToast.astro - Floating loading indicator for map overlay
+// Appears centered at top of map during data fetching
+---
+
+<div id="loading-toast" class="absolute top-4 left-1/2 -translate-x-1/2 z-[900] hidden">
+  <div class="bg-white/95 backdrop-blur-sm rounded-full shadow-lg px-4 py-2.5 flex items-center gap-2.5">
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600 animate-spin">
+      <path d="M21 12a9 9 0 1 1-6.22-8.4"></path>
+    </svg>
+    <span class="text-sm font-medium text-gray-600">Loading listings...</span>
+  </div>
+</div>
+
+<script is:inline>
+  // Event listener for loading state
+  window.addEventListener('facilityListLoading', (e) => {
+    const toast = document.getElementById('loading-toast');
+    if (toast) {
+      if (e.detail.loading) {
+        toast.classList.remove('hidden');
+      } else {
+        toast.classList.add('hidden');
+      }
+    }
+  });
+</script>

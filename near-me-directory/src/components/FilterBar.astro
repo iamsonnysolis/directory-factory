@@ -1,0 +1,263 @@
+---
+// FilterBar.astro
+// Icons migrated to Lucide (2026-06-15)
+// Horizontal filter pills matching Next.js reference site exactly
+// - Active state: bg-amber-500 text-white border-amber-500 (not blue!)
+// - Inactive state: bg-white text-gray-700 border-gray-300
+// - Filter keys match useFilters hook: openNow, accessible, baby_change, is24Hours, shower, parking
+// - Dispatches events that the map listens to for filtering
+// - On feature pages: read-only with active feature highlighted
+
+import Icon from './ui/Icon.astro';
+
+// Get current URL to detect if we're on a feature page
+const pathname = Astro.url.pathname;
+
+// Check if we're on a feature page: /[state]/with/[feature] or /[state]/[region]/with/[feature] or /[state]/[region]/[suburb]/with/[feature]
+// Features in URL use kebab-case: baby-change, drinking-water, etc.
+const isFeaturePage = pathname.match(/\/[a-z]{2,3}\/(?:[a-z0-9-]+\/)?with\/[a-z-]+/);
+let activeFeature = null;
+
+// Convert kebab-case to snake_case for internal matching
+const toSnakeCase = (str: string): string => str.replace(/-/g, '_');
+
+if (isFeaturePage) {
+  // Extract feature from URL: .../with/[feature]
+  const match = pathname.match(/\/with\/([a-z-]+)$/);
+  if (match) {
+    activeFeature = toSnakeCase(match[1]); // Convert kebab to snake for matching
+  }
+}
+
+// Helper function to get button classes based on filter and mode
+function getButtonClasses(filter: string) {
+  const base = "shrink-0 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-sm border transition-all duration-150 shadow-sm";
+  if (isFeaturePage) {
+    // Read-only mode: base + inactive, unless it's the active feature
+    const isActive = activeFeature === filter;
+    return `${base} bg-white text-gray-700 border-gray-300 font-normal${isActive ? " bg-amber-500 text-white border-amber-500 font-semibold shadow-amber-200" : ""}`;
+  } else {
+    // Interactive mode: start as inactive (client will handle active state)
+    return `${base} bg-white text-gray-700 border-gray-300 font-normal hover:border-gray-400 hover:shadow`;
+  }
+}
+---
+<div id="filter-bar" class={`flex items-center gap-2 px-3 py-2 overflow-x-auto bg-white border-b border-gray-100 ${isFeaturePage ? "pointer-events-none opacity-90" : ""}`}>
+  <button data-filter="openNow" class={getButtonClasses('openNow')}>
+    <Icon name="clock" width={13} height={13} />
+    Open now
+  </button>
+  <button data-filter="accessible" class={getButtonClasses('accessible')}>
+    <Icon name="accessibility" width={13} height={13} />
+    Accessible
+  </button>
+  <button data-filter="baby_change" class={getButtonClasses('baby_change')}>
+    <Icon name="baby" width={13} height={13} />
+    Baby change
+  </button>
+  <button data-filter="is24Hours" class={getButtonClasses('is24Hours')}>
+    <span class="font-bold text-xs leading-none">24</span>
+    24 hrs
+  </button>
+  <button data-filter="shower" class={getButtonClasses('shower')}>
+    <Icon name="showerHead" width={13} height={13} />
+    Shower
+  </button>
+  <button data-filter="parking" class={getButtonClasses('parking')}>
+    <Icon name="parking" width={13} height={13} />
+    Parking
+  </button>
+  <button id="clear-filters" class={isFeaturePage ? "hidden" : "shrink-0 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-sm text-gray-500 border border-gray-200 bg-white hover:bg-gray-50 shadow-sm transition-colors"}>
+    <Icon name="x" width={13} height={13} />
+    Clear
+  </button>
+</div>
+
+<script is:inline>
+// Filter state management - dispatches to map for API filtering
+// Uses same filter key model as reference useFilters hook:
+//   { features: string[], openNow: boolean, is24Hours: boolean }
+// On feature pages: read-only with active feature highlighted
+(function() {
+  // Convert kebab-case to snake_case for internal matching
+  const toSnakeCase = (str) => str.replace(/-/g, '_');
+  
+  // Check if we're on a feature page (read-only mode)
+  const pathname = window.location.pathname;
+  const isFeaturePage = pathname.match(/\/[a-z]{2,3}\/(?:[a-z0-9-]+\/)?with\/[a-z-]+/);
+
+  if (isFeaturePage) {
+    // Read-only mode - just set up initial state and UI, no event listeners
+    const state = {
+      features: [],
+      openNow: false,
+      is24Hours: false,
+    };
+
+    // Try to extract active feature from URL to highlight it
+    const match = pathname.match(/\/with\/([a-z-]+)$/);
+    const activeFeatureFromURL = match ? toSnakeCase(match[1]) : null; // Convert kebab to snake
+
+    function isActive(filter) {
+      if (filter === 'openNow') return state.openNow;
+      if (filter === 'is24Hours') return state.is24Hours;
+      return state.features.includes(filter);
+    }
+
+    function updateUI() {
+      document.querySelectorAll('#filter-bar [data-filter]').forEach(btn => {
+        const filter = btn.getAttribute('data-filter');
+        const active = isActive(filter);
+        if (active) {
+          btn.classList.add('bg-amber-500', 'text-white', 'border-amber-500', 'font-semibold', 'shadow-amber-200');
+          btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-300', 'font-normal');
+        } else {
+          btn.classList.remove('bg-amber-500', 'text-white', 'border-amber-500', 'font-semibold', 'shadow-amber-200');
+          btn.classList.add('bg-white', 'text-gray-700', 'border-gray-300', 'font-normal');
+        }
+      });
+
+      const clearBtn = document.getElementById('clear-filters');
+      if (clearBtn) {
+        // In read-only mode, we already set the hidden class via server-side rendering
+        // So we don't need to toggle it here
+      }
+    }
+
+    function activeCount() {
+      return state.features.length + (state.openNow ? 1 : 0) + (state.is24Hours ? 1 : 0);
+    }
+
+    // Initialize UI based on URL feature
+    if (activeFeatureFromURL) {
+      // Set state to highlight the feature from URL
+      if (activeFeatureFromURL === 'openNow') {
+        state.openNow = true;
+      } else if (activeFeatureFromURL === 'is24Hours') {
+        state.is24Hours = true;
+      } else {
+        state.features = [activeFeatureFromURL];
+      }
+    }
+
+    updateUI();
+
+    // Disable all interactions
+    document.querySelectorAll('#filter-bar button').forEach(btn => {
+      btn.disabled = true;
+      btn.style.cursor = 'default';
+    });
+
+    return; // Exit early for read-only mode
+  }
+
+  // Normal interactive mode (not on feature page)
+  // Ensure DOM is ready before querying elements
+  // This handles both SSR hydration and initial page load
+  
+  // Define initFilterBar FIRST so it's available when initFilterBarSafe calls it
+  function initFilterBar() {
+    const state = {
+      features: [],
+      openNow: false,
+      is24Hours: false,
+    };
+
+    function isActive(filter) {
+      if (filter === 'openNow') return state.openNow;
+      if (filter === 'is24Hours') return state.is24Hours;
+      return state.features.includes(filter);
+    }
+
+    function activeCount() {
+      return state.features.length + (state.openNow ? 1 : 0) + (state.is24Hours ? 1 : 0);
+    }
+
+    function updateUI() {
+      document.querySelectorAll('#filter-bar [data-filter]').forEach(btn => {
+        const filter = btn.getAttribute('data-filter');
+        const active = isActive(filter);
+        if (active) {
+          btn.classList.add('bg-amber-500', 'text-white', 'border-amber-500', 'font-semibold', 'shadow-amber-200');
+          btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-300', 'font-normal');
+        } else {
+          btn.classList.remove('bg-amber-500', 'text-white', 'border-amber-500', 'font-semibold', 'shadow-amber-200');
+          btn.classList.add('bg-white', 'text-gray-700', 'border-gray-300', 'font-normal');
+        }
+      });
+
+      const clearBtn = document.getElementById('clear-filters');
+      if (clearBtn) {
+        clearBtn.classList.toggle('hidden', activeCount() === 0);
+      }
+    }
+
+    function dispatchUpdate() {
+      window.dispatchEvent(new CustomEvent('filtersChanged', {
+        detail: {
+          filters: state,
+          filterArray: [
+            ...(state.openNow ? ['openNow'] : []),
+            ...(state.is24Hours ? ['is24Hours'] : []),
+            ...state.features,
+          ],
+        }
+      }));
+    }
+
+    document.querySelectorAll('#filter-bar [data-filter]').forEach(btn => {
+      btn.addEventListener('click', function() {
+        const filter = this.getAttribute('data-filter');
+        if (filter === 'openNow') {
+          state.openNow = !state.openNow;
+        } else if (filter === 'is24Hours') {
+          state.is24Hours = !state.is24Hours;
+        } else {
+          const idx = state.features.indexOf(filter);
+          if (idx >= 0) {
+            state.features.splice(idx, 1);
+          } else {
+            state.features.push(filter);
+          }
+        }
+        updateUI();
+        dispatchUpdate();
+      });
+    });
+
+    document.getElementById('clear-filters')?.addEventListener('click', () => {
+      state.features = [];
+      state.openNow = false;
+      state.is24Hours = false;
+      updateUI();
+      dispatchUpdate();
+    });
+
+    window.addEventListener('clearFilters', () => {
+      state.features = [];
+      state.openNow = false;
+      state.is24Hours = false;
+      updateUI();
+      dispatchUpdate();
+    });
+  }
+
+  // Now call it safely - DOM should be ready after setTimeout(0)
+  setTimeout(() => {
+    const filterBar = document.getElementById('filter-bar');
+    if (filterBar) {
+      initFilterBar();
+    } else {
+      // Last resort: poll until it exists
+      const check = () => {
+        if (document.getElementById('filter-bar')) {
+          initFilterBar();
+        } else {
+          requestAnimationFrame(check);
+        }
+      };
+      requestAnimationFrame(check);
+    }
+  }, 0);
+})();
+</script>

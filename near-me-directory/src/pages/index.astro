@@ -1,0 +1,83 @@
+---
+// Homepage for Near Me Directory
+// Full-screen map design with SSR data fetching via D1
+// Full-screen map design with SSR data fetching via D1
+import Layout from '../layouts/Layout.astro';
+import FilterBar from '../components/FilterBar.astro';
+import DynamicLiveMap from '../components/maps/DynamicLiveMap.astro';
+import ListingList from '../components/directory/ListingList.astro';
+import LoadingToast from '../components/ui/LoadingToast.astro';
+import { getHomeMetadata } from '../lib/utils/seo';
+import { loadSiteConfig } from '../lib/site-config';
+const siteConfig = await loadSiteConfig();
+import { buildBreadcrumbSchema, buildHomeSchema, serializeSchema } from '../lib/utils/schema';
+
+// Initial center/zoom - center on Australia
+const initialLat = -25.2744;
+const initialLng = 133.7751;
+const initialZoom = 5;
+
+// Get SEO metadata
+const metadata = getHomeMetadata(siteConfig);
+
+// Build breadcrumbs for schema
+const breadcrumbs = [{ label: 'Home', href: '/' }];
+const breadcrumbSchema = buildBreadcrumbSchema(breadcrumbs);
+const homeSchema = buildHomeSchema();
+---
+
+<Layout metadata={metadata} hideFooter={true}>
+  <!-- JSON-LD Schema -->
+  <script type="application/ld+json" set:html={serializeSchema(breadcrumbSchema)} />
+  <script type="application/ld+json" set:html={serializeSchema(homeSchema)} />
+
+  <!-- Full-screen map layout - matches reference structure exactly -->
+  <div class="flex flex-col h-[calc(100vh-63px)] overflow-hidden">
+    <!-- Filter Bar - Fixed under header -->
+    <div class="relative z-[1000] flex-none">
+      <FilterBar />
+    </div>
+    
+    <!-- Split View: Sidebar (desktop) + Map -->
+    <div class="flex flex-1 overflow-hidden min-h-0">
+      <!-- Sidebar - Desktop only -->
+      <aside class="hidden md:flex flex-col w-[360px] lg:w-[400px] shrink-0 bg-white border-r border-gray-200">
+        <div class="flex-1 overflow-y-auto overscroll-contain">
+          <ListingList 
+            listings={[]}
+            features={{}}
+            openStatus={{}}
+            loading={false}
+            error={null}
+            geoStatus="idle"
+          />
+        </div>
+      </aside>
+      
+      <!-- Map Container -->
+      <div class="relative flex-1 min-h-0">
+        <DynamicLiveMap 
+          initialLat={initialLat}
+          initialLng={initialLng}
+          initialZoom={initialZoom}
+        />
+        <!-- Loading toast overlay -->
+        <LoadingToast />
+      </div>
+    </div>
+
+    <!-- Mobile Results Drawer -->
+    <div class="md:hidden relative z-[900] flex-none bg-white border-t border-gray-200 shadow-[0_-2px_12px_rgba(0,0,0,0.08)]">
+      <div class="h-[50vh] overflow-y-auto overscroll-contain">
+        <ListingList 
+          listings={[]}
+          features={{}}
+          openStatus={{}}
+          loading={false}
+          error={null}
+          geoStatus="idle"
+        />
+      </div>
+    </div>
+  </div>
+</Layout>

@@ -1,0 +1,20 @@
+---
+// StateRankBadge.astro - Display rank badge #1 of 8, #2 of 8, etc.
+// Props: rank, rankOf
+// Color: gold for #1, silver #2, bronze #3, neutral otherwise
+
+interface Props {
+  rank: number | null | undefined;
+  rankOf?: number;
+}
+
+const { rank, rankOf = 8 } = Astro.props;
+
+const badgeClass = rank 
+  ? (rank === 1 ? 'bg-amber-100 text-amber-800' : rank === 2 ? 'bg-gray-200 text-gray-700' : rank === 3 ? 'bg-orange-100 text-orange-800' : 'bg-gray-100 text-gray-600')
+  : 'bg-gray-100 text-gray-600';
+---
+
+<span class={'inline-flex items-center justify-center min-w-[40px] px-2 py-0.5 rounded-full text-xs font-semibold ' + badgeClass}>
+  #{rank || '—'} of {rankOf}
+</span>

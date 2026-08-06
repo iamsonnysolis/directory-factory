@@ -1,0 +1,48 @@
+---
+// CoverageBar.astro - Visual percentage bar with topic color and grade badge
+// Props: value (0-100 percentage), label, minVal and maxVal for scaling, nationalAvg for grade
+
+interface Props {
+  value: number | null | undefined;
+  label: string;
+  minVal?: number;
+  maxVal?: number;
+  nationalAvg?: number | null | undefined;
+  topic?: 'primary' | 'family' | 'hours' | 'gap' | 'good' | 'neutral';
+}
+
+import { pctToGrade } from '../../lib/stats-utils';
+import GradeBadge from './GradeBadge.astro';
+
+const { value, label, minVal, maxVal, nationalAvg, topic = 'neutral' } = Astro.props;
+
+const topicColors = {
+  primary: 'blue',
+  family: 'teal',
+  hours: 'amber',
+  gap: 'red',
+  good: 'green',
+  neutral: 'gray'
+};
+
+const color = topicColors[topic];
+const pct = value ?? 0;
+
+// Calculate bar width scaled to min-max range (not 0-100)
+const barMin = minVal ?? 0;
+const barMax = maxVal ?? 100;
+const barRange = barMax - barMin;
+const barWidth = Math.max(5, ((pct - barMin) / barRange) * 100); // min 5% for visibility
+
+// Grade using pctToGrade (relative to national average)
+const gradeInfo = pctToGrade(pct, nationalAvg);
+---
+
+<div class="flex items-center gap-3">
+  <span class="text-sm font-medium w-48">{label}</span>
+  <div class="flex-1 bg-gray-200 rounded-full h-6 overflow-hidden">
+    <div class={"bg-" + color + "-500 h-full transition-all"} style={"width: " + barWidth + "%"}></div>
+  </div>
+  <span class="text-sm font-semibold w-16 text-right">{pct.toFixed(1)}%</span>
+  <GradeBadge grade={gradeInfo.grade} />
+</div>

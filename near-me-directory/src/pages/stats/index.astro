@@ -1,0 +1,385 @@
+---
+// /stats - National Overview page
+export const revalidate = 604800;
+export const prerender = true;
+
+import Layout from '../../layouts/Layout.astro';
+import StatTile from '../../components/stats/StatTile.astro';
+import Icon from '../../components/ui/Icon.astro';
+import InsightCallout from '../../components/stats/InsightCallout.astro';
+import { getNationStats, getEntityRankings, getAvailableVersions } from '../../lib/stats';
+import { loadSiteConfig } from '../../lib/site-config';
+const siteConfig = await loadSiteConfig();
+import { formatVersion, formatCount, formatPct, stateName, pctToGrade, FEATURE_TAXONOMY, topicColorClasses } from '../../lib/stats-utils';
+
+const TOPIC_COLOR: Record<string, string> = { primary: 'blue', family: 'teal', hours: 'amber' };
+const ICON_BY_SLUG: Record<string, string> = { accessible: 'accessibility', 'baby-change': 'baby', 'open-24h': 'clock' };
+
+// Fully resolved, literal class strings for each tab button's two states.
+// Built once here so the client-side tab-switch script never needs to
+// reconstruct a Tailwind class name from a bare color string — that's what
+// silently loses classes on click (Tailwind's JIT can't see runtime string
+// concatenation, so half the classes get purged from the compiled CSS).
+const TAB_BASE_CLASSES = 'tab-btn px-4 py-2 text-sm font-medium rounded flex items-center gap-1.5';
+const TAB_INACTIVE_CLASSES = `${TAB_BASE_CLASSES} bg-gray-100 text-gray-700 hover:bg-gray-200`;
+
+// The three headline comparisons shown as tabs. Each is fully derived from
+// FEATURE_TAXONOMY — add a slug here and the tab, bars, and links all follow.
+const TAB_SLUGS = ['accessible', 'baby-change', 'open-24h'] as const;
+
+const nation = await getNationStats();
+const availableVersions = await getAvailableVersions();
+
+const tabData = await Promise.all(
+  TAB_SLUGS.map(async (slug) => {
+    const f = FEATURE_TAXONOMY[slug];
+    const color = TOPIC_COLOR[f.topic] ?? 'blue';
+    const classes = topicColorClasses(color);
+    const rankings = await getEntityRankings('state', f.rankMetric);
+    const values = rankings.map((r) => r.value || 0).filter((v) => v > 0);
+    const min = Math.min(...values, 0);
+    const max = Math.max(...values, 100);
+    const avg = rankings.length > 0 ? rankings.reduce((s, r) => s + (r.value || 0), 0) / rankings.length : 0;
+    const bars = rankings.map((r) => ({
+      id: r.entity_id,
+      name: stateName(r.entity_id),
+      value: r.value,
+      rank: r.rank,
+      rankOf: r.rank_of,
+      grade: pctToGrade(r.value || 0, avg).grade,
+    }));
+    return {
+      slug, label: f.shortLabel, icon: ICON_BY_SLUG[slug] ?? 'circle', color, classes,
+      href: `/stats/features/${slug}`, min, max, avg, bars,
+      activeClasses: `${TAB_BASE_CLASSES} active ${classes.badgeBg} ${classes.badgeText}`,
+    };
+  })
+);
+
+const accessibleTab = tabData.find((t) => t.slug === 'accessible')!;
+
+// Real region count, rather than a guessed fallback — one lightweight query,
+// reused nowhere else since only the length is needed.
+const allRegionCounts = await getEntityRankings('region', 'listing_count');
+const regionCount = allRegionCounts.length;
+const stateCount = accessibleTab.bars.length;
+
+const sourceVersion = nation?.listing_count?.source_version;
+const year = (sourceVersion || '').split('-')[0] || ('' + new Date().getFullYear());
+
+// Built here (frontmatter), not inline in the <script> tag below — Astro
+// never evaluates {} expressions inside <script> content, even with
+// is:inline, so JSON.stringify(...) has to run here and get injected via
+// set:html instead.
+const jsonLd = JSON.stringify({
+  "@context": "https://schema.org",
+  "@type": "Dataset",
+  "name": "Australian Public Listing Statistics",
+  "description": "Accessibility, family facilities, and infrastructure data for " + formatCount(nation?.listing_count?.value) + " Australian public listings",
+  "url": "https://facilitiesnearme.com.au/stats",
+  "datePublished": (sourceVersion || "2025-01") + "-01",
+  "creator": { "@type": "Organization", "name": "Near Me Directory" },
+  "source": "National Public Listing Map, Australian Government"
+});
+
+const topRegions = nation?.top_regions_accessible_pct?.metadata?.list?.slice(0, 10) || [];
+
+// SEO metadata
+const title = 'Australian Public Listing Statistics ' + year + ' | Near Me Directory';
+const description = 'Australia has ' + formatCount(nation?.listing_count?.value) + ' public listings. ' + formatPct(nation?.accessible_pct_avg?.value) + ' are wheelchair accessible and ' + formatPct(nation?.baby_change_pct_avg?.value) + ' have baby change facilities. Complete data by state and region.';
+---
+
+<Layout
+  metadata={{
+    title,
+    description,
+    canonical: 'https://facilitiesnearme.com.au/stats',
+    openGraph: {
+      title,
+      description,
+      url: 'https://facilitiesnearme.com.au/stats',
+      siteName: 'Near Me Directory',
+      type: 'website'
+    }
+  }}>
+
+  <!-- SECTION 1 — Page header -->
+  <section class="bg-gradient-to-b from-blue-50 to-white py-12">
+
+    <!-- Breadcrumbs -->
+    <nav class="container mx-auto px-4 pb-4 text-sm text-gray-500" aria-label="Breadcrumb">
+      <a href="/" class="hover:underline text-gray-600">Home</a>
+      <span class="mx-1.5">/</span>
+      <span class="text-gray-700 font-medium">Stats</span>
+    </nav>
+
+    <div class="container mx-auto px-4">
+      <h1 class="text-3xl md:text-4xl font-bold text-gray-900 mb-2">
+        Australian Public Listing Statistics {year}
+      </h1>
+      <p class="text-gray-600 mb-1">
+        Based on {formatCount(nation?.listing_count?.value)} facilities across {stateCount} states and {formatCount(regionCount)} local government areas
+      </p>
+      <p class="text-gray-500 text-sm">
+        Data current as of {formatVersion(sourceVersion)}
+      </p>
+    </div>
+  </section>
+
+  <!-- SECTION 2 — Three Hero Tiles -->
+  <section class="py-8 bg-white">
+    <div class="container mx-auto px-4">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <StatTile
+          value={formatPct(nation?.accessible_pct_avg?.value)}
+          label="Wheelchair Accessible"
+          sublabel={'of ' + formatCount(nation?.listing_count?.value) + ' facilities'}
+          href="/stats/features/accessible"
+          topic="primary"
+        />
+        <StatTile
+          value={formatCount(nation?.baby_change_count?.value)}
+          label="Baby Change Facilities"
+          sublabel={formatPct(nation?.baby_change_pct_avg?.value) + ' of all listings'}
+          href="/stats/features/baby-change"
+          topic="family"
+        />
+        <StatTile
+          value={formatCount(nation?.open_24h_count?.value)}
+          label="Open 24 Hours"
+          sublabel={formatPct(nation?.open_24h_pct_avg?.value) + ' of all listings'}
+          href="/stats/features/open-24h"
+          topic="hours"
+        />
+      </div>
+    </div>
+  </section>
+
+  <!-- SECTION 3 — Opening Insight Callout -->
+  <section class="py-8 bg-white">
+    <div class="container mx-auto px-4">
+      <InsightCallout topic="primary">
+        <p class="font-semibold mb-1">More than half of Australia's public listings are wheelchair accessible</p>
+        <p class="text-gray-700">
+          Coverage ranges from {formatPct(accessibleTab.bars[0]?.value || 0)} in {accessibleTab.bars[0]?.name || ''} to {formatPct(accessibleTab.bars[accessibleTab.bars.length - 1]?.value || 0)} in {accessibleTab.bars[accessibleTab.bars.length - 1]?.name || ''}.
+          Whether a facility works for you depends heavily on where you are.
+        </p>
+      </InsightCallout>
+    </div>
+  </section>
+
+  <!-- SECTION 4 — State Comparison Chart (tabs generated from TAB_SLUGS) -->
+  <section class="py-8 bg-gray-50">
+    <div class="container mx-auto px-4">
+      <h2 class="text-2xl font-bold text-gray-900 mb-2">How does your state compare?</h2>
+      <p class="text-gray-600 mb-4">% of listings with each feature, by state</p>
+
+      <div class="flex flex-wrap gap-2 mb-6">
+        {tabData.map((t, i) => (
+          <button
+            data-tab={t.slug}
+            data-href={t.href}
+            data-active-class={t.activeClasses}
+            data-inactive-class={TAB_INACTIVE_CLASSES}
+            class={i === 0 ? t.activeClasses : TAB_INACTIVE_CLASSES}
+          >
+            <Icon name={t.icon} size={16} class="w-4 h-4" />{t.label}
+          </button>
+        ))}
+      </div>
+
+      {tabData.map((t, i) => (
+        <div id={`tab-${t.slug}`} class={`tab-content ${i === 0 ? '' : 'hidden'}`}>
+          <div
+            id={`state-chart-${t.slug}`}
+            class="space-y-3"
+            data-states={JSON.stringify(t.bars)}
+            data-min={t.min}
+            data-max={t.max}
+            data-bar-class={t.classes.bar}
+          ></div>
+        </div>
+      ))}
+
+      <a id="full-breakdown-link" href={accessibleTab.href} class="text-sm text-blue-600 hover:text-blue-800 font-medium mt-4 inline-block">
+        See full {accessibleTab.label.toLowerCase()} breakdown &rarr;
+      </a>
+    </div>
+  </section>
+
+  <!-- SECTION 5 — Two Topic Cards -->
+  <section class="py-8 bg-white">
+    <div class="container mx-auto px-4">
+      <div class="grid md:grid-cols-2 gap-6">
+        <div class="bg-gradient-to-br from-blue-50 to-white rounded-lg p-6 border border-blue-100">
+          <div class="flex items-center gap-2 mb-3">
+            <Icon name="accessibility" size={24} class="w-6 h-6 text-blue-600" />
+            <h3 class="text-lg font-semibold text-gray-900">Accessibility</h3>
+          </div>
+          <div class="text-sm text-gray-700 mb-3">
+            {formatPct(nation?.accessible_pct_avg?.value)} of facilities are wheelchair accessible.
+          </div>
+          <a href="/stats/features/accessible" class="text-sm text-blue-600 hover:text-blue-800 font-medium">See state rankings &rarr;</a>
+        </div>
+        <div class="bg-gradient-to-br from-teal-50 to-white rounded-lg p-6 border border-teal-100">
+          <div class="flex items-center gap-2 mb-3">
+            <Icon name="baby" size={24} class="w-6 h-6 text-teal-600" />
+            <h3 class="text-lg font-semibold text-gray-900">Baby Change</h3>
+          </div>
+          <div class="text-sm text-gray-700 mb-3">
+            {formatCount(nation?.baby_change_count?.value)} facilities with baby change tables.
+          </div>
+          <a href="/stats/features/baby-change" class="text-sm text-teal-600 hover:text-teal-800 font-medium">See baby change data &rarr;</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECTION 6 — Baby change section -->
+  <section class="py-8 bg-gray-50">
+    <div class="container mx-auto px-4">
+      <h2 class="text-2xl font-bold text-gray-900 mb-4">Baby change facilities across Australia</h2>
+      <p class="text-gray-700 mb-4">
+        {formatPct(nation?.baby_change_pct_avg?.value)} of Australian public listings has a baby change table. Coverage varies significantly by state.
+      </p>
+      <a href="/listings?feature=baby_change" class="text-sm text-teal-600 hover:text-teal-800 font-medium">Find listings with baby change &rarr;</a>
+    </div>
+  </section>
+
+  <!-- SECTION 7 — 24-Hour Access -->
+  <section class="py-8 bg-white">
+    <div class="container mx-auto px-4">
+      <h2 class="text-2xl font-bold text-gray-900 mb-4">When are Australia's public listings open?</h2>
+      <div class="text-gray-700 mb-4">
+        {formatCount(nation?.open_24h_count?.value)} facilities open around the clock. This is {formatPct(nation?.open_24h_pct_avg?.value)} of all public listings.
+      </div>
+      <a href="/stats/features/open-24h" class="text-sm text-amber-600 hover:text-amber-800 font-medium">Explore 24-hour facilities &rarr;</a>
+    </div>
+  </section>
+
+  <!-- SECTION 8 — Top accessible regions -->
+  <section class="py-8 bg-gray-50">
+    <div class="container mx-auto px-4">
+      <h2 class="text-2xl font-bold text-gray-900 mb-4">Best-covered regions for accessible listings</h2>
+      <p class="text-gray-600 mb-3 text-sm">Minimum 20 facilities required to qualify.</p>
+      <div id="top-regions-table" data-items={JSON.stringify(topRegions)} class="bg-white rounded-lg border border-gray-200">
+        <!-- Table rendered by script -->
+      </div>
+      <a href="/stats/features/accessible" class="text-sm text-blue-600 hover:text-blue-800 font-medium mt-4 inline-block">See full accessibility rankings &rarr;</a>
+    </div>
+  </section>
+
+  <!-- SECTION 9 — Methodology -->
+  <section class="py-8 bg-white">
+    <div class="container mx-auto px-4">
+      <h2 class="text-2xl font-bold text-gray-900 mb-4">About this data</h2>
+      <p class="text-gray-700 mb-4">
+        Data sourced from the National Public Listing Map, published by the Australian Department of Health,
+        and the Australian Bureau of Statistics. Statistics reflect {formatCount(nation?.listing_count?.value)} public facility facilities across Australia.
+      </p>
+      <p class="text-gray-600 text-sm">Last updated: {formatVersion(sourceVersion)}</p>
+    </div>
+  </section>
+
+  <!-- Year History -->
+  <section class="py-8 bg-gray-50">
+    <div class="container mx-auto px-4 text-center">
+      <p class="text-xs text-gray-500 mb-2">Previous data releases:</p>
+      <div class="flex justify-center gap-4 text-xs">
+        {availableVersions.filter((v) => v !== sourceVersion).map((v) => (
+          <a href={'?version=' + v} class="text-gray-600 hover:underline">{formatVersion(v)}</a>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- Schema.org Dataset Structured Data -->
+  <script type="application/ld+json" set:html={jsonLd} />
+
+  <script is:inline>
+    function fmtCount(n) { return n ? Number(n).toLocaleString('en-AU') : '—'; }
+
+    // barClass is a fully-resolved literal string (e.g. "bg-blue-500")
+    // computed server-side via topicColorClasses — never rebuilt from a bare
+    // color name here, since Tailwind's JIT can't detect runtime-concatenated
+    // class names and silently drops them from the compiled CSS.
+    function renderStateBars(containerId, states, min, max, barClass) {
+      const chart = document.getElementById(containerId);
+      if (!chart) return;
+      const range = (max || 100) - (min || 0);
+      states.forEach(function (s) {
+        const el = document.createElement('a');
+        el.href = '/stats/' + s.id;
+        el.className = 'flex items-center gap-3 hover:bg-white hover:shadow-sm rounded-lg p-3 transition-all';
+        const barWidth = Math.max(5, ((s.value - (min || 0)) / range) * 100);
+        const gradeBadge = '<span class="text-xs px-2 py-1 rounded ' +
+          (s.grade === 'A' ? 'bg-green-100 text-green-800' :
+           s.grade === 'B' ? 'bg-amber-100 text-amber-800' :
+           'bg-red-100 text-red-800') + '">[' + s.grade + ']</span>';
+        el.innerHTML = '<span class="text-sm font-medium w-32">' + s.name + '</span>' +
+          '<div class="flex-1 bg-gray-200 rounded-full h-6 overflow-hidden">' +
+            '<div class="' + barClass + ' h-full transition-all" style="width: ' + barWidth + '%"></div>' +
+          '</div>' +
+          '<span class="text-sm font-semibold w-16 text-right">' + (s.value || 0).toFixed(1) + '%</span>' +
+          gradeBadge +
+          '<span class="text-xs text-gray-500"># ' + s.rank + ' of ' + (s.rankOf || '?') + '</span>';
+        chart.appendChild(el);
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      document.querySelectorAll('[id^="state-chart-"]').forEach(function (el) {
+        renderStateBars(
+          el.id,
+          JSON.parse(el.getAttribute('data-states') || '[]'),
+          parseFloat(el.getAttribute('data-min') || '0'),
+          parseFloat(el.getAttribute('data-max') || '100'),
+          el.getAttribute('data-bar-class') || 'bg-blue-500'
+        );
+      });
+
+      // Tab switching — className comes from each button's own data
+      // attributes (fully resolved server-side), so the flex layout classes
+      // and each tab's own color both survive the click, instead of being
+      // overwritten with a single hardcoded string.
+      const fullBreakdownLink = document.getElementById('full-breakdown-link');
+      document.querySelectorAll('.tab-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          document.querySelectorAll('.tab-btn').forEach(function (b) {
+            b.className = b.getAttribute('data-inactive-class');
+          });
+          this.className = this.getAttribute('data-active-class');
+          document.querySelectorAll('.tab-content').forEach((t) => t.classList.add('hidden'));
+          document.getElementById('tab-' + this.dataset.tab).classList.remove('hidden');
+          if (fullBreakdownLink) {
+            fullBreakdownLink.href = this.dataset.href;
+            fullBreakdownLink.textContent = 'See full ' + this.textContent.trim().toLowerCase() + ' breakdown \u2192';
+          }
+        });
+      });
+
+      // Render top regions table
+      const topRegionsTable = document.getElementById('top-regions-table');
+      if (topRegionsTable) {
+        const items = JSON.parse(topRegionsTable.getAttribute('data-items') || '[]');
+        topRegionsTable.innerHTML = '<table class="w-full border-collapse">' +
+          '<thead><tr class="border-b border-gray-200 bg-blue-50">' +
+            '<th class="text-left py-2 px-3 text-sm font-semibold text-gray-700 w-12">#</th>' +
+            '<th class="text-left py-2 px-3 text-sm font-semibold text-gray-700">Region</th>' +
+            '<th class="text-left py-2 px-3 text-sm font-semibold text-gray-700">State</th>' +
+            '<th class="text-right py-2 px-3 text-sm font-semibold text-gray-700">% Accessible</th>' +
+            '<th class="text-right py-2 px-3 text-sm font-semibold text-gray-700">Facilities</th>' +
+          '</tr></thead><tbody>' +
+          items.map(function (item, i) {
+            return '<tr class="border-b border-gray-100 hover:bg-gray-50">' +
+              '<td class="py-2 px-3 text-sm text-gray-600">' + (i + 1) + '</td>' +
+              '<td class="py-2 px-3 font-medium">' + item.name + '</td>' +
+              '<td class="py-2 px-3 text-sm text-gray-600">' + (item.state_code || '').toUpperCase() + '</td>' +
+              '<td class="py-2 px-3 text-sm text-right font-semibold">' + (item.value || 0).toFixed(1) + '%</td>' +
+              '<td class="py-2 px-3 text-sm text-right">' + fmtCount(item.listing_count || 0) + '</td>' +
+            '</tr>';
+          }).join('') + '</tbody></table>';
+      }
+    });
+  </script>
+</Layout>

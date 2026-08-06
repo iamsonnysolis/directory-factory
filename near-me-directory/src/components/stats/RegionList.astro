@@ -1,0 +1,101 @@
+---
+// RegionList.astro - Renders top-10 lists from nation metadata
+// Props: items (from metadata.list), stateFilter?
+// If stateFilter provided, shows dropdown to filter client-side
+
+interface Props {
+  items: any[];
+  stateFilter?: boolean;
+  showRank?: boolean;
+  valueLabel?: string;
+}
+
+const { items, stateFilter, showRank = true, valueLabel = 'Value' } = Astro.props;
+
+const states = ['nsw', 'vic', 'qld', 'wa', 'sa', 'tas', 'act', 'nt'];
+---
+
+{#if stateFilter && items && items.length > 0}
+<div class="region-list-container">
+  <div class="mb-3">
+    <label for="state-filter" class="sr-only">Filter by state</label>
+    <select 
+      id="state-filter" 
+      class="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+    >
+      <option value="">All states</option>
+      {#each states as state}
+        <option value={state}>{state.toUpperCase()}</option>
+      {/each}
+    </select>
+  </div>
+{/if}
+
+<table class="w-full border-collapse">
+  <thead>
+    <tr class="border-b border-gray-200">
+      {#if showRank}
+        <th class="text-left py-2 px-3 text-sm font-semibold text-gray-700 w-16">Rank</th>
+      {/if}
+      <th class="text-left py-2 px-3 text-sm font-semibold text-gray-700">Region</th>
+      <th class="text-left py-2 px-3 text-sm font-semibold text-gray-700">State</th>
+      <th class="text-right py-2 px-3 text-sm font-semibold text-gray-700">{valueLabel}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {#if items}
+      {#each items as item, index}
+        {index % 2 === 0 ? (
+          <tr class="border-b border-gray-100 hover:bg-gray-50 bg-white" data-state={item.state_code}>
+            {#if showRank}
+              <td class="py-2 px-3 text-sm text-gray-600">{index + 1}</td>
+            {/if}
+            <td class="py-2 px-3 font-medium">
+              {item.name}
+            </td>
+            <td class="py-2 px-3 text-sm text-gray-600">{item.state_code?.toUpperCase()}</td>
+            <td class="py-2 px-3 text-sm text-right font-semibold">{item.value}</td>
+          </tr>
+        ) : (
+          <tr class="border-b border-gray-100 hover:bg-gray-50 bg-gray-50/50" data-state={item.state_code}>
+            {#if showRank}
+              <td class="py-2 px-3 text-sm text-gray-600">{index + 1}</td>
+            {/if}
+            <td class="py-2 px-3 font-medium">
+              {item.name}
+            </td>
+            <td class="py-2 px-3 text-sm text-gray-600">{item.state_code?.toUpperCase()}</td>
+            <td class="py-2 px-3 text-sm text-right font-semibold">{item.value}</td>
+          </tr>
+        )}
+      {/each}
+    {:else}
+      <tr>
+        <td colspan="4" class="py-4 px-3 text-center text-gray-500">No data available</td>
+      </tr>
+    {/if}
+  </tbody>
+</table>
+
+{#if stateFilter && items && items.length > 0}
+<script is:inline>
+  (function() {
+    const select = document.getElementById('state-filter');
+    if (!select) return;
+    
+    select.addEventListener('change', function() {
+      const selectedState = this.value;
+      const rows = document.querySelectorAll('.region-list-container tbody tr');
+      
+      rows.forEach(row => {
+        const state = row.getAttribute('data-state');
+        if (!selectedState || state === selectedState) {
+          row.style.display = '';
+        } else {
+          row.style.display = 'none';
+        }
+      });
+    });
+  })();
+</script>
+{/if}

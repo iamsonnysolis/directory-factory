@@ -1,0 +1,17 @@
+# Redirects for near-me-directory
+# State slugs (lowercase)
+/nsw /nsw 301
+/vic /vic 301
+/qld /qld 301
+/wa /wa 301
+/sa /sa 301
+/tas /tas 301
+/act /act 301
+/nt /nt 301
+
+# Old stats feature pages -> new dynamic /stats/features/[feature] routes
+/stats/accessibility      /stats/features/accessible        301
+/stats/families           /stats/features/baby-change       301
+/stats/changing-places    /stats/features/changing-places   301
+/stats/caravans           /stats/features/dump-point         301
+/stats/24-hours           /stats/features/open-24h          301

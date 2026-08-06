@@ -1,0 +1,83 @@
+---
+// ListingMap.astro - Single facility map component
+interface Props {
+  latitude: number;
+  longitude: number;
+  name: string;
+  facilityId: number | string;
+}
+
+const { latitude, longitude, name, facilityId } = Astro.props;
+const mapId = 'map-' + facilityId;
+---
+
+{latitude && longitude && (
+  <section class="w-full py-4">
+    <div class="rounded-xl overflow-hidden border border-gray-200">
+      <div
+        id={mapId}
+        class="w-full h-44"
+        style="min-height: 11rem;"
+        data-lat={latitude}
+        data-lng={longitude}
+        data-name={name}
+      />
+    </div>
+  </section>
+
+  <script>
+  // ListingMap - Vanilla JS Leaflet initialization for single facility map
+  (function() {
+    // Wait for Leaflet to be available
+    const waitForLeaflet = (callback) => {
+      if (typeof L !== 'undefined') {
+        callback();
+      } else {
+        setTimeout(() => waitForLeaflet(callback), 50);
+      }
+    };
+
+    const initMap = () => {
+      const mapElements = document.querySelectorAll('[id^="map-"]');
+      mapElements.forEach(function(el) {
+        const lat = parseFloat(el.dataset.lat);
+        const lng = parseFloat(el.dataset.lng);
+        const name = el.dataset.name;
+
+        if (!lat || !lng) return;
+
+        const map = L.map(el.id, {
+          center: [lat, lng],
+          zoom: 17,
+          zoomControl: false,
+          attributionControl: false
+        });
+
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+          attribution: '&copy; OpenStreetMap &copy; CARTO',
+          subdomains: 'abcd',
+          maxZoom: 20
+        }).addTo(map);
+
+        L.control.attribution({ position: 'bottomleft', prefix: false }).addTo(map);
+        L.control.zoom({ position: 'topright' }).addTo(map);
+
+        const icon = L.divIcon({
+          html: '<div style="width:22px;height:22px;background:#1d4ed8;border-radius:50%;border:2.5px solid #fff;line-height:17px;text-align:center;font-weight:900;font-size:11px;color:#fff;box-shadow:0 2px 6px rgba(0,0,0,0.28);font-family:system-ui,sans-serif;cursor:pointer;">T</div>',
+          className: 'nm-marker',
+          iconSize: [22, 22],
+          iconAnchor: [11, 11]
+        });
+
+        L.marker([lat, lng], { icon }).addTo(map);
+      });
+    };
+
+    if (document.readyState === 'complete') {
+      waitForLeaflet(initMap);
+    } else {
+      window.addEventListener('load', () => waitForLeaflet(initMap));
+    }
+  })();
+  </script>
+)}

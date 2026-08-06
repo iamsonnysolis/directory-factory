@@ -1,0 +1,13 @@
+name = "near-me-directory"
+compatibility_date = "2025-04-01"
+pages_build_output_dir = "./dist"
+
+# KV namespace for sessions (required by @astrojs/cloudflare)
+[[kv_namespaces]]
+binding = "SESSION"
+id = "8c84cf74803340e085bda3a5da9bbbf2"
+
+# D1 database binding for site data
+[[d1_databases]]
+binding = "DB"
+database_name = "near-me-directory"

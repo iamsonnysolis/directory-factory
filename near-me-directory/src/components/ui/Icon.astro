@@ -1,0 +1,128 @@
+---
+// Icon.astro - Wrapper for Lucide icons with Tailwind compatibility
+// Provides single import point for all icons with size and className props
+
+import Accessibility from '@lucide/astro/icons/accessibility';
+import ArrowUpToLine from '@lucide/astro/icons/arrow-up-to-line';
+import Baby from '@lucide/astro/icons/baby';
+import ChevronDown from '@lucide/astro/icons/chevron-down';
+import ChevronRight from '@lucide/astro/icons/chevron-right';
+import CircleAlert from '@lucide/astro/icons/circle-alert';
+import Clock from '@lucide/astro/icons/clock';
+import CreditCard from '@lucide/astro/icons/credit-card';
+import GlassWater from '@lucide/astro/icons/glass-water';
+import Info from '@lucide/astro/icons/info';
+import Key from '@lucide/astro/icons/key';
+import KeyRound from '@lucide/astro/icons/key-round';
+import LoaderCircle from '@lucide/astro/icons/loader-circle';
+import Check from '@lucide/astro/icons/check';
+import LocateFixed from '@lucide/astro/icons/locate-fixed';
+import MapPin from '@lucide/astro/icons/map-pin';
+import Mars from '@lucide/astro/icons/mars';
+import Search from '@lucide/astro/icons/search';
+import Send from '@lucide/astro/icons/send';
+import ShowerHead from '@lucide/astro/icons/shower-head';
+import SquareParking from '@lucide/astro/icons/square-parking';
+import Tent from '@lucide/astro/icons/tent';
+import Trash2 from '@lucide/astro/icons/trash-2';
+import Users from '@lucide/astro/icons/users';
+import UserRound from '@lucide/astro/icons/user-round';
+import Venus from '@lucide/astro/icons/venus';
+import X from '@lucide/astro/icons/x';
+import Syringe from '@lucide/astro/icons/syringe';
+import Trophy from '@lucide/astro/icons/trophy';
+import ChartBar from '@lucide/astro/icons/chart-bar';
+import ChartBarBig from '@lucide/astro/icons/chart-bar-big';
+import CalendarDays from '@lucide/astro/icons/calendar-days';
+import AlarmClock from '@lucide/astro/icons/alarm-clock';
+import ChartColumn from '@lucide/astro/icons/chart-column';
+
+// Icon name to component mapping
+const ICON_COMPONENTS = {
+  // Navigation & UI
+  search: Search,
+  clock: Clock,
+  mapPin: MapPin,
+  map: MapPin,
+  chevronRight: ChevronRight,
+  chevronDown: ChevronDown,
+  x: X,
+  close: X,
+  arrowUpToLine: ArrowUpToLine,
+  arrowUp: ArrowUpToLine,
+
+  // Listing features
+  accessibility: Accessibility,
+  baby: Baby,
+  parking: SquareParking,
+  squareParking: SquareParking,
+  shower: ShowerHead,
+  showerHead: ShowerHead,
+  syringe: Syringe,
+
+  // Feature-specific icons
+  users: Users,
+  userRound: UserRound,
+  venus: Venus,
+  mars: Mars,
+  key: Key,
+  keyRound: KeyRound,
+  creditCard: CreditCard,
+  glassWater: GlassWater,
+  trash2: Trash2,
+  trash: Trash2,
+
+  // Navigation & UI
+  locateFixed: LocateFixed,
+  locate: LocateFixed,
+
+  // Other
+  send: Send,
+  directions: Send,
+  info: Info,
+  infoCircle: Info,
+  alertCircle: CircleAlert,
+  circleAlert: CircleAlert,
+  tent: Tent,
+  loaderCircle: LoaderCircle,
+  loader: LoaderCircle,
+  spinner: LoaderCircle,
+  check: Check,
+  chartcolumn: ChartColumn,
+  
+  // Stats section icons
+  trophy: Trophy,
+  chartBar: ChartBar,
+  chartBarBig: ChartBarBig,
+  calendarDays: CalendarDays,
+  alarmClock: AlarmClock,
+  users: Users,
+} as const;
+
+type IconName = keyof typeof ICON_COMPONENTS;
+
+interface Props {
+  name: IconName;
+  size?: number;
+  strokeWidth?: number;
+  class?: string;
+  id?: string;
+}
+
+const {
+  name,
+  size = 20,
+  strokeWidth = 2,
+  class: className = '',
+  id
+} = Astro.props;
+
+const IconComponent = ICON_COMPONENTS[name] || Search;
+---
+
+<IconComponent
+  size={size}
+  stroke-width={strokeWidth}
+  class={className}
+  {...id && {id}}
+/>

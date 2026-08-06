@@ -1,0 +1,139 @@
+---
+// Suburb directory page (SSR) - Refactored to use component-driven architecture
+// Uses fetchSuburbData for all data fetching, isolates map in SuburbMap component
+import Layout from '../../../layouts/Layout.astro';
+import SuburbHeader from '../../../components/listing/SuburbHeader.astro';
+import SuburbMap from '../../../components/listing/SuburbMap.astro';
+import SuburbListingList from '../../../components/listing/SuburbListingList.astro';
+import SuburbMoreSection from '../../../components/listing/SuburbMoreSection.astro';
+import SuburbEeatContent from '../../../components/listing/SuburbEeatContent.astro';
+import FeaturePills from '../../../components/directory/FeaturePills.astro';
+import { fetchSuburbData } from '../../../lib/db';
+import { getSuburbMetadata } from '../../../lib/utils/seo';
+import { loadSiteConfig } from '../../../lib/site-config';
+const siteConfig = await loadSiteConfig();
+import { buildBreadcrumbSchema, buildSuburbSchema, serializeSchema } from '../../../lib/utils/schema';
+
+const { state, region, suburb } = Astro.params;
+
+// Validate required params
+if (!state || !region || !suburb) {
+  return Astro.redirect('/');
+}
+
+// Fetch all data via the database utility
+const data = await fetchSuburbData(state, region, suburb);
+
+// Destructure fetched data
+const {
+  state: stateRecord,
+  region: regionData,
+  suburb: suburbData,
+  listings,
+  stateSlug,
+} = data;
+
+// Redirect if not found
+if (!stateRecord || !regionData || !suburbData) {
+  return Astro.redirect('/');
+}
+
+// Build breadcrumbs for header and schema
+const breadcrumbs = [
+  { label: 'Home', href: '/' },
+  { label: stateRecord.name ?? stateSlug, href: `/${stateSlug}` },
+  { label: regionData?.name_clean ?? regionData?.name, href: `/${stateSlug}/${region}` },
+  { label: suburbData?.name, href: `/${stateSlug}/${region}/${suburb}` },
+];
+
+// Build schema objects
+const breadcrumbSchema = buildBreadcrumbSchema(breadcrumbs);
+const suburbSchema = buildSuburbSchema(stateSlug, regionData, suburbData);
+
+// Get SEO metadata
+const metadata = getSuburbMetadata(
+  stateRecord.code,
+  regionData,
+  suburbData,
+  siteConfig
+);
+
+// Map listings with region/suburb data for list and map components
+const facilitiesWithPaths = listings?.map(t => ({
+  listing_id: t.listing_id,
+  slug: t.slug,
+  name: t.name,
+  address: t.address,
+  latitude: t.latitude,
+  longitude: t.longitude,
+  is_open_24h: t.is_open_24h,
+  region_slug: regionData?.slug,
+  suburb_slug: suburbData?.slug
+})) || [];
+---
+
+<Layout metadata={metadata}>
+  {/* Structured Data */}
+  <script type="application/ld+json" set:html={serializeSchema(breadcrumbSchema)} />
+  <script type="application/ld+json" set:html={serializeSchema(suburbSchema)} />
+
+  <!-- Suburb Header Section -->
+  <div class="bg-white border-b border-gray-100">
+    <div class="max-w-5xl mx-auto px-4 py-5">
+      <SuburbHeader
+        suburbName={suburbData.name}
+        facilityCount={suburbData.listing_count ?? 0}
+        stateName={stateRecord.name}
+        breadcrumbs={breadcrumbs}
+      />
+    </div>
+  </div>
+
+  <main class="max-w-5xl mx-auto px-4 pt-5 pb-8 flex flex-col gap-5">
+    <div class="w-full">
+      <SuburbMap
+        suburbName={suburbData.name}
+        listings={facilitiesWithPaths}
+        suburbLat={suburbData.latitude}
+        suburbLng={suburbData.longitude}
+        stateSlug={stateSlug}
+      />
+    </div>
+
+    <!-- Feature Pills Navigation -->
+    <div class="w-full">
+      <FeaturePills
+        stateSlug={stateSlug}
+        regionSlug={regionData?.slug}
+        suburbSlug={suburbData?.slug}
+        currentFeature={null}
+      />
+    </div>
+
+    <div class="w-full">
+      <SuburbListingList
+        listings={facilitiesWithPaths}
+        stateSlug={stateSlug}
+        suburbName={suburbData.name}
+      />
+    </div>
+
+    <div class="w-full">
+      <SuburbMoreSection
+        stateSlug={stateSlug}
+        stateName={stateRecord.name}
+        stateFacilityCount={stateRecord?.listing_count}
+        regionSlug={regionData?.slug}
+        regionName={regionData?.name_clean ?? regionData?.name}
+        regionFacilityCount={regionData?.listing_count}
+      />
+    </div>
+
+    <div class="w-full">
+      <SuburbEeatContent
+        content={{}}
+        locationName={suburbData.name}
+      />
+    </div>
+  </main>
+</Layout>

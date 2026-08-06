@@ -1,0 +1,69 @@
+---
+// Notes.astro - Displays access, baby change, parking, and dump point notes conditionally sorted by priority
+// Icons migrated to Lucide (2026-06-15)
+
+import Icon from '../ui/Icon.astro';
+
+export interface Props {
+  notes: Array<{ note_type: string; note: string }> | null;
+}
+
+const { notes } = Astro.props;
+
+if (!notes || notes.length === 0) {
+  return null;
+}
+
+// Sort notes: access notes first (highest priority), then others
+const sortedNotes = [...notes].sort((a, b) => {
+  const priorityOrder: Record<string, number> = { access: 0, dump_point: 1, baby_change: 2, parking: 3 };
+  return (priorityOrder[a.note_type] ?? 99) - (priorityOrder[b.note_type] ?? 99);
+});
+
+const getNoteConfig = (noteType: string) => {
+  const config: Record<string, { colorClass: string; label: string; isAccess: boolean }> = {
+    access: { colorClass: 'text-amber-800 bg-amber-50 border-amber-300', label: 'Access', isAccess: true },
+    parking: { colorClass: 'text-gray-700 bg-gray-50 border-gray-200', label: 'Parking', isAccess: false },
+    baby_change: { colorClass: 'text-purple-700 bg-purple-50 border-purple-200', label: 'Baby change', isAccess: false },
+    adult_change: { colorClass: 'text-green-700 bg-green-50 border-green-200', label: 'Adult change', isAccess: false },
+    dump_point: { colorClass: 'text-red-700 bg-red-50 border-red-200', label: 'Dump point', isAccess: false },
+  };
+  return config[noteType] || { colorClass: 'text-blue-700 bg-blue-50 border-blue-200', label: noteType.replace(/_/g, ' '), isAccess: false };
+};
+
+// Map note types to Lucide icon names
+const getNoteIcon = (noteType: string) => {
+  const iconMap: Record<string, string> = {
+    access: 'info',
+    parking: 'squareParking',
+    baby_change: 'baby',
+    dump_point: 'tent',
+    adult_change: 'info'
+  };
+  return iconMap[noteType] || 'info';
+};
+---
+
+<div class="w-full">
+  <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-2">Notes</h2>
+  <ul class="flex flex-col gap-2">
+    {sortedNotes.map((note) => {
+      const { colorClass, label, isAccess } = getNoteConfig(note.note_type);
+      const liClass = isAccess
+        ? 'flex items-start gap-3 px-4 py-3 rounded-xl border text-sm bg-amber-50 border-2 border-amber-300'
+        : 'flex items-start gap-3 px-4 py-3 rounded-xl border text-sm ' + colorClass;
+      const labelClass = isAccess ? 'font-semibold text-amber-800' : 'font-semibold text-blue-700';
+      const iconName = getNoteIcon(note.note_type);
+      
+      return (
+        <li key={note.note_type} class={liClass}>
+          <Icon name={iconName} class="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <div>
+            <span class={labelClass}>{label}:</span>
+            <span class="text-gray-700">{note.note}</span>
+          </div>
+        </li>
+      );
+    })}
+  </ul>
+</div>

@@ -1,0 +1,190 @@
+---
+// ListingHeader.astro - Header component for facility detail page
+// Ported from Next.js ListingHeader.tsx with exact styling and behavior
+// Icons migrated to Lucide (2026-06-17)
+
+import type { BreadcrumbItem } from '../../lib/utils/schema';
+import { getDirectionsUrl, getAppleMapsUrl } from '../../lib/geo';
+import Icon from '../ui/Icon.astro';
+
+export interface Props {
+  name: string;
+  address: string | null;
+  town: string | null;
+  stateName: string;
+  latitude: number;
+  longitude: number;
+  facilityId: number;
+  is24Hours: boolean;
+  features: Array<{ feature_key: string }> | null;
+  breadcrumbs: BreadcrumbItem[];
+}
+
+const {
+  name,
+  address,
+  town,
+  stateName,
+  latitude,
+  longitude,
+  facilityId,
+  is24Hours,
+  features,
+  breadcrumbs,
+} = Astro.props;
+
+// High-priority features shown on facility cards
+const HIGH_PRIORITY_FEATURES = [
+  'accessible', 'baby_change', 'unisex', 'parking',
+  'baby_care_room', 'shower', 'drinking_water',
+];
+
+// Feature icon mapping
+const FEATURE_ICON_MAP: Record<string, string> = {
+  accessible: 'accessibility',
+  adult_change: 'accessibility',
+  all_gender: 'users',
+  ambulant: 'accessibility',
+  baby_care_room: 'baby',
+  baby_change: 'baby',
+  changing_places: 'accessibility',
+  drinking_water: 'glassWater',
+  dump_point: 'trash2',
+  female: 'venus',
+  key_required: 'key',
+  lh_transfer: 'accessibility',
+  male: 'mars',
+  mens_pad_disposal: 'trash2',
+  mlak: 'key',
+  parking: 'squareParking',
+  parking_accessible: 'squareParking',
+  payment_required: 'creditCard',
+  rh_transfer: 'accessibility',
+  sanitary_disposal: 'trash2',
+  sharps_disposal: 'syringe',
+  shower: 'showerHead',
+  unisex: 'users',
+};
+
+// Feature labels
+const FEATURE_LABELS: Record<string, string> = {
+  accessible: 'Accessible',
+  adult_change: 'Adult change',
+  all_gender: 'All gender',
+  ambulant: 'Ambulant',
+  baby_care_room: 'Baby care room',
+  baby_change: 'Baby change',
+  changing_places: 'Changing places',
+  drinking_water: 'Drinking water',
+  dump_point: 'Dump point',
+  female: 'Female',
+  key_required: 'Key required',
+  lh_transfer: 'LH transfer',
+  male: 'Male',
+  mens_pad_disposal: 'Male disposal',
+  mlak: 'MLAK',
+  parking: 'Parking',
+  parking_accessible: 'Accessible parking',
+  payment_required: 'Payment required',
+  rh_transfer: 'RH transfer',
+  sanitary_disposal: 'Sanitary disposal',
+  sharps_disposal: 'Sharps disposal',
+  shower: 'Shower',
+  unisex: 'Unisex',
+};
+
+const googleUrl = getDirectionsUrl(latitude, longitude, name);
+const appleUrl = getAppleMapsUrl(latitude, longitude, name);
+const fullAddress = [address, town, stateName].filter(Boolean).join(', ');
+const featureKeys = new Set(features ? features.map(f => f.feature_key) : []);
+
+// Get badges for features that exist on this facility
+const featureBadges = (HIGH_PRIORITY_FEATURES as string[])
+  .filter(key => featureKeys.has(key))
+  .map(key => ({
+    key,
+    label: FEATURE_LABELS[key as keyof typeof FEATURE_LABELS] || key.replace(/_/g, ' '),
+    icon: FEATURE_ICON_MAP[key as keyof typeof FEATURE_ICON_MAP] || 'info',
+  }));
+---
+
+<div class="w-full">
+  <!-- Breadcrumb Navigation -->
+  <nav aria-label="Breadcrumb" class="mb-3">
+    <ol class="flex items-center gap-1 flex-wrap text-xs text-gray-400">
+      {breadcrumbs.map((item, i) => {
+        const isLast = i === breadcrumbs.length - 1;
+        return (
+          <li key={item.href} class="flex items-center gap-1 min-w-0">
+            {i > 0 && <Icon name="chevronRight" size={14} class="text-gray-300 shrink-0" />}
+            {isLast ? (
+              <span class="text-gray-600 font-medium truncate">{item.label}</span>
+            ) : (
+              <a href={item.href} class="hover:text-blue-600 transition-colors truncate">
+                {item.label}
+              </a>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  </nav>
+
+  <!-- Main Heading -->
+  <h1 class="text-[1.6rem] font-black text-gray-900 leading-tight mt-1 mb-2">{name}</h1>
+
+  <!-- 24 Hours Badge -->
+  {is24Hours && (
+    <div class="mb-3">
+      <div class="inline-flex items-center gap-2 rounded-full font-semibold border text-green-700 bg-green-50 border-green-200 px-4 py-2 text-base">
+        <Icon name="clock" size={14} strokeWidth={2.5} class="shrink-0" />
+        Open 24 hrs
+      </div>
+    </div>
+  )}
+
+  <!-- Feature Badges -->
+  {featureBadges.length > 0 && (
+    <div class="flex flex-wrap gap-2 mb-4">
+      {featureBadges.map(({ key, label, icon }) => (
+        <span
+          key={key}
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold bg-blue-50 text-blue-700 border border-blue-200"
+        >
+          <Icon name={icon} size={14} strokeWidth={2.5} />
+          {label}
+        </span>
+      ))}
+    </div>
+  )}
+
+  <!-- Primary CTA - Get Directions -->
+  <a
+    href={googleUrl}
+    target="_blank"
+    rel="noopener noreferrer"
+    class="flex w-full items-center justify-center gap-2.5 h-14 rounded-2xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-base font-black shadow-md shadow-blue-300/50 transition-colors mb-2"
+  >
+    <Icon name="send" size={20} strokeWidth={2.5} />
+    Get Directions
+  </a>
+
+  <!-- Secondary CTA - Apple Maps -->
+  <a
+    href={appleUrl}
+    target="_blank"
+    rel="noopener noreferrer"
+    class="flex w-full items-center justify-center gap-2 h-10 rounded-xl bg-white hover:bg-gray-50 active:bg-gray-100 text-gray-600 text-sm font-semibold border border-gray-200 transition-colors mb-4"
+  >
+    <Icon name="mapPin" size={16} strokeWidth={2} />
+    Apple Maps
+  </a>
+
+  <!-- Address -->
+  {fullAddress && (
+    <p class="flex items-start gap-1.5 text-xs text-gray-400 leading-snug">
+      <Icon name="mapPin" size={12} strokeWidth={2} class="shrink-0 text-gray-300 mt-0.5" />
+      {fullAddress}
+    </p>
+  )}
+</div>

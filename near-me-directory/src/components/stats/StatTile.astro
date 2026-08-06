@@ -1,0 +1,61 @@
+---
+// StatTile.astro - Large number display with icon, topic color, and label
+
+import Icon from '../ui/Icon.astro';
+
+interface Props {
+  value: string | number;
+  label: string;
+  sublabel?: string;
+  href?: string;
+  topic?: 'primary' | 'family' | 'hours' | 'gap' | 'good' | 'neutral';
+}
+
+const { value, label, sublabel, href, topic = 'neutral' } = Astro.props;
+
+// Determine icon and colors
+const colors: Record<string, { color: string; icon: string }> = {
+  primary: { color: 'blue', icon: 'accessibility' },
+  family: { color: 'teal', icon: 'baby' },
+  hours: { color: 'amber', icon: 'clock' },
+  gap: { color: 'red', icon: 'alertCircle' },
+  good: { color: 'green', icon: 'check' },
+  neutral: { color: 'gray', icon: 'mapPin' }
+};
+
+const { color, icon } = colors[topic] || colors.neutral;
+const iconContainerClass = "w-10 h-10 mx-auto mb-2 rounded bg-" + color + "-100 flex items-center justify-center";
+const iconColorClass = "text-" + color + "-600";
+---
+
+{href ? (
+  <a href={href} class="block bg-white rounded-lg p-4 text-center border border-gray-200 hover:shadow-md transition-all">
+    <div class={iconContainerClass}>
+      <Icon name={icon} size={24} class={iconColorClass} />
+    </div>
+    <div class="text-3xl md:text-4xl font-bold text-gray-900 mb-1">
+      {value}
+    </div>
+    <div class="text-sm text-gray-600">
+      {label}
+    </div>
+    {sublabel && (
+      <div class="text-xs text-gray-500 mt-1">{sublabel}</div>
+    )}
+  </a>
+) : (
+  <div class="bg-white rounded-lg p-4 text-center border border-gray-200">
+    <div class={iconContainerClass}>
+      <Icon name={icon} size={24} class={iconColorClass} />
+    </div>
+    <div class="text-3xl md:text-4xl font-bold text-gray-900 mb-1">
+      {value}
+    </div>
+    <div class="text-sm text-gray-600">
+      {label}
+    </div>
+    {sublabel && (
+      <div class="text-xs text-gray-500 mt-1">{sublabel}</div>
+    )}
+  </div>
+)}

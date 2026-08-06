@@ -1,0 +1,30 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { loadSiteConfig } from '../lib/site-config';
+import { getContactMetadata } from '../lib/utils/seo';
+
+const config = await loadSiteConfig();
+const metadata = getContactMetadata(config);
+
+// Pull contact copy from site_config
+const contactContent = config.legal_contact || {
+  intro: "Have a question, suggestion, or spotted an error? We'd love to hear from you!",
+  data_issues: 'Listing data is sourced from publicly available datasets. If you notice incorrect information, please report it to the data source directly.',
+  feedback: `Found a bug or have an idea for improvement? Send us a message at <a href="mailto:${config.contact_email || 'hello@nearme.directory'}">${config.contact_email || 'hello@nearme.directory'}</a>.`,
+};
+---
+
+<Layout metadata={metadata}>
+  <article class="prose prose-gray max-w-3xl mx-auto">
+    <h1>Contact Us</h1>
+
+    <h2>Get in Touch</h2>
+    <p>{contactContent.intro}</p>
+
+    <h2>Data Issues</h2>
+    <p>{contactContent.data_issues}</p>
+
+    <h2>Website Feedback</h2>
+    <p set:html={contactContent.feedback}></p>
+  </article>
+</Layout>

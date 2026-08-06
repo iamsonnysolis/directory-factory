@@ -1,0 +1,58 @@
+---
+// MoreListingsSection.astro - Handles deep-linking back to local suburb and regional parent hubs
+// Icons migrated to Lucide (2026-06-15)
+
+import Icon from '../ui/Icon.astro';
+
+export interface Props {
+  stateSlug: string;
+  regionSlug?: string;
+  regionName?: string;
+  regionFacilityCount?: number;
+  suburbSlug?: string;
+  suburbName?: string;
+  suburbFacilityCount?: number;
+}
+
+const { 
+  stateSlug, 
+  regionSlug, 
+  regionName, 
+  regionFacilityCount, 
+  suburbSlug, 
+  suburbName, 
+  suburbFacilityCount 
+} = Astro.props;
+
+if (!suburbSlug || !suburbName) {
+  return null;
+}
+---
+
+<div class="w-full rounded-xl border border-gray-200 overflow-hidden">
+  <div class="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+    <p class="text-xs font-bold text-gray-400 uppercase tracking-wider">More listings nearby</p>
+  </div>
+  <div class="divide-y divide-gray-100">
+    <a href={'/' + stateSlug + '/' + regionSlug + '/' + suburbSlug} class="flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors group">
+      <span class="text-sm font-medium text-gray-700 group-hover:text-blue-700">
+        All listings in {suburbName.charAt(0).toUpperCase() + suburbName.slice(1)}
+      </span>
+      <span class="flex items-center gap-1 text-sm text-gray-400 group-hover:text-blue-500">
+        {suburbFacilityCount} facility{suburbFacilityCount !== 1 ? 's' : ''}
+        <Icon name="chevronRight" class="w-3.5 h-3.5" />
+      </span>
+    </a>
+    {regionSlug && regionName && (
+      <a href={'/' + stateSlug + '/' + regionSlug} class="flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors group">
+        <span class="text-sm font-medium text-gray-700 group-hover:text-blue-700">
+          More listings in {regionName.charAt(0).toUpperCase() + regionName.slice(1)}
+        </span>
+        <span class="flex items-center gap-1 text-sm text-gray-400 group-hover:text-blue-500">
+          {regionFacilityCount} facility{regionFacilityCount !== 1 ? 's' : ''}
+          <Icon name="chevronRight" class="w-3.5 h-3.5" />
+        </span>
+      </a>
+    )}
+  </div>
+</div>

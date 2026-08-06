@@ -1,0 +1,73 @@
+---
+// FeaturePills.astro - Navigation pills for feature-filter pages
+// Shows links to all available feature filters at state/region/suburb level
+// Useful: Clear navigation to filtered views
+// SEO: Helps AI crawlers understand site structure and available features
+// Enjoyable: Consistent, clickable pills with hover states
+import Icon from '../ui/Icon.astro';
+
+interface Props {
+  stateSlug: string;
+  regionSlug?: string;
+  suburbSlug?: string;
+  currentFeature?: string; // kebab-case from URL
+}
+
+const { stateSlug, regionSlug, suburbSlug, currentFeature } = Astro.props;
+
+// Available features with their labels and icons (snake_case keys)
+const FEATURES = [
+  { key: 'accessible', label: 'Accessible', icon: 'accessibility' },
+  { key: 'baby_change', label: 'Baby Change', icon: 'baby' },
+  { key: 'drinking_water', label: 'Water', icon: 'glassWater' },
+  { key: 'parking', label: 'Parking', icon: 'parking' },
+  { key: 'shower', label: 'Shower', icon: 'showerHead' },
+  { key: 'sharps_disposal', label: 'Sharps', icon: 'syringe' },
+  { key: 'sanitary_disposal', label: 'Sanitary', icon: 'trash2' },
+  { key: 'unisex', label: 'Unisex', icon: 'users' },
+  { key: 'all_gender', label: 'All Gender', icon: 'users' },
+];
+
+// Convert snake_case to kebab-case for URL display
+const toKebabCase = (str: string) => str.replace(/_/g, '-');
+
+// Build URL based on level (uses kebab-case in URLs)
+const buildFeatureUrl = (featureKey: string) => {
+  const kebabKey = toKebabCase(featureKey);
+  if (suburbSlug && regionSlug) {
+    return `/${stateSlug}/${regionSlug}/${suburbSlug}/with/${kebabKey}`;
+  }
+  if (regionSlug) {
+    return `/${stateSlug}/${regionSlug}/with/${kebabKey}`;
+  }
+  return `/${stateSlug}/with/${kebabKey}`;
+};
+
+const baseClasses = "inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors";
+const activeClasses = "bg-blue-100 text-blue-700 border border-blue-200";
+const inactiveClasses = "bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 hover:text-gray-800";
+---
+
+<div class="mt-4">
+  <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+    Find by feature
+  </p>
+  <div class="flex flex-wrap gap-2">
+    {FEATURES.map((feature) => {
+      const kebabKey = toKebabCase(feature.key);
+      const isActive = currentFeature === kebabKey;
+      const href = buildFeatureUrl(feature.key);
+      
+      return (
+        <a 
+          href={href}
+          class={`${baseClasses} ${isActive ? activeClasses : inactiveClasses}`}
+          aria-current={isActive ? 'page' : undefined}
+        >
+          <Icon name={feature.icon} size={14} strokeWidth={2} />
+          {feature.label}
+        </a>
+      );
+    })}
+  </div>
+</div>

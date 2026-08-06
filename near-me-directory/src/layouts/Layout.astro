@@ -1,0 +1,181 @@
+---
+interface Props {
+  metadata?: {
+    title?: string;
+    description?: string;
+    canonical?: string;
+    openGraph?: {
+      title?: string;
+      description?: string;
+      url?: string;
+      siteName?: string;
+      type?: string;
+      images?: Array<{ url: string }>;
+    };
+    twitter?: {
+      card?: string;
+      site?: string;
+      title?: string;
+      description?: string;
+      images?: string[];
+    };
+  };
+  title?: string; // Fallback for backwards compatibility
+  hideFooter?: boolean;
+  origin?: string;
+}
+
+import Header from '../components/layout/Header.astro';
+import Footer from '../components/layout/Footer.astro';
+
+// Load site config at request time for dynamic branding
+// Falls back to defaults if D1 is unavailable
+const { loadSiteConfig, getDefaultMetadata } = await import('../lib/site-config');
+const config = await loadSiteConfig();
+
+const { metadata, title, hideFooter = false, origin = config.site_url } = Astro.props;
+
+// Fallback chain for title and description
+const pageTitle = metadata?.title ?? title ?? config.default_title;
+const pageDescription = metadata?.description ?? config.default_description;
+
+// Build default metadata from config if none provided
+const og = metadata?.openGraph ?? getDefaultMetadata(config).openGraph;
+const twitter = metadata?.twitter ?? getDefaultMetadata(config).twitter;
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={pageDescription} />
+
+    <!-- Canonical URL -->
+    {metadata?.canonical && (
+      <link rel="canonical" href={metadata.canonical} />
+    )}
+
+    <!-- Open Graph Tags -->
+    {og && (
+      <>
+        <meta property="og:title" content={og.title} />
+        <meta property="og:description" content={og.description} />
+        <meta property="og:url" content={og.url} />
+        <meta property="og:site_name" content={og.siteName} />
+        <meta property="og:type" content={og.type} />
+        {og.images?.[0] && (
+          <meta property="og:image" content={og.images[0].url} />
+        )}
+      </>
+    )}
+
+    <!-- Twitter Card Tags -->
+    {twitter && (
+      <>
+        <meta name="twitter:card" content={twitter.card} />
+        <meta name="twitter:site" content={twitter.site} />
+        <meta name="twitter:title" content={twitter.title} />
+        <meta name="twitter:description" content={twitter.description} />
+        {twitter.images?.[0] && (
+          <meta name="twitter:image" content={twitter.images[0]} />
+        )}
+      </>
+    )}
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" crossorigin />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" crossorigin />
+
+    <!-- Google Analytics (optional, from site config) -->
+    {config.ga_measurement_id && (
+      <>
+        <script async src={`https://www.googletagmanager.com/gtag/js?id=${config.ga_measurement_id}`}></script>
+        <script>
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){{window.dataLayer.push(arguments);}}
+          gtag('js', new Date());
+          gtag('config', `{config.ga_measurement_id}`);
+        </script>
+      </>
+    )}
+
+    <style>
+      /* Override Leaflet's default link color for popup buttons - must come after external CSS */
+      .leaflet-container .leaflet-popup-content a.nm-button,
+      .leaflet-popup-content a.nm-button,
+      a.nm-button {{
+        color: #ffffff !important;
+      }}
+      /* Body background for full-height homepage */
+      body.homepage-bg {{
+        background-color: #eff6ff;
+      }}
+    </style>
+    <script is:inline src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
+    <script is:inline src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js" crossorigin></script>
+  </head>
+  <body class:list={["text-gray-900 font-sans antialiased", hideFooter ? "homepage-bg" : ""]}>
+    <Header />
+    <script is:inline>
+    (function() {{
+      const DEBOUNCE_MS = 280;
+      const MIN_CHARS = 2;
+      function initSearch() {{
+        const searchInput = document.querySelector('[data-search-input]');
+        const dropdown = document.querySelector('[data-search-dropdown]');
+        const loadingEl = dropdown?.querySelector('[data-search-loading]');
+        const emptyEl = dropdown?.querySelector('[data-search-empty]');
+        const resultsEl = dropdown?.querySelector('[data-search-results]');
+        if (!searchInput || !dropdown) return;
+        let debounceTimer = null;
+        searchInput.addEventListener('input', function() {{
+          const query = this.value.trim();
+          if (query.length < MIN_CHARS) {{ dropdown.classList.add('hidden'); return; }}
+          dropdown.classList.remove('hidden');
+          loadingEl?.classList.remove('hidden');
+          emptyEl?.classList.add('hidden');
+          if (resultsEl) resultsEl.innerHTML = '';
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(async () => {{
+            try {{
+              const res = await fetch('/api/search?q=' + encodeURIComponent(query) + '&limit=10');
+              if (!res.ok) throw new Error('Search failed');
+              const results = await res.json();
+              loadingEl?.classList.add('hidden');
+              if (!results || results.length === 0) {{ emptyEl?.classList.remove('hidden'); return; }}
+              emptyEl?.classList.add('hidden');
+              if (!resultsEl) return;
+              resultsEl.innerHTML = results.slice(0, 8).map((item) => {{
+                const isListing = item.type === 'listing';
+                return '<li><a href=\"' + item.href + '\" class=\"flex items-center gap-2.5 px-4 py-3 hover:bg-gray-50 transition-colors ' + (isListing ? 'border-l-2 border-l-amber-400' : '') + '\"><span class=\"text-gray-400 shrink-0\">' + (isListing ? '📍' : '📍') + '</span><span class=\"flex-1 min-w-0\"><span class=\"block text-sm font-semibold text-gray-900 truncate\">' + item.label + '</span><span class=\"block text-xs text-gray-500 truncate\">' + item.sublabel + '</span></span></a></li>';
+              }}).join('');
+            }} catch (e) {{ loadingEl?.classList.add('hidden'); emptyEl?.classList.remove('hidden'); }}
+          }}, DEBOUNCE_MS);
+        }});
+        searchInput.addEventListener('focus', function() {{
+          if (searchInput.value.trim().length >= MIN_CHARS && resultsEl && resultsEl.children.length > 0) {{
+            dropdown.classList.remove('hidden');
+          }}
+        }});
+        document.addEventListener('mousedown', function(e) {{
+          if (!searchInput.closest('[data-search-container]')?.contains(e.target)) {{ dropdown.classList.add('hidden'); }}
+        }});
+        searchInput.addEventListener('keydown', function(e) {{ if (e.key === 'Escape') {{ dropdown.classList.add('hidden'); }} }});
+      }}
+      if (document.readyState === 'loading') {{ document.addEventListener('DOMContentLoaded', initSearch); }}
+      else {{ initSearch(); }}
+    }})();
+    </script>
+
+    <main>
+      <slot />
+    </main>
+
+    {/* Footer only on non-homepage routes */}
+    {!hideFooter && (
+      <Footer />
+    )}
+  </body>
+</html>

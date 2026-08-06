@@ -1,0 +1,47 @@
+---
+// SuburbMoreSection.astro - Links to region and state parent pages
+// Icons migrated to Lucide (2026-06-15)
+
+import Icon from '../ui/Icon.astro';
+
+interface Props {
+  stateSlug: string;
+  stateName: string;
+  stateFacilityCount?: number;
+  regionSlug?: string;
+  regionName?: string;
+  regionFacilityCount?: number;
+}
+
+const { stateSlug, stateName, stateFacilityCount, regionSlug, regionName, regionFacilityCount } = Astro.props;
+---
+
+<section class="mb-10 rounded-xl border border-gray-200 overflow-hidden">
+  <div class="px-4 py-3 bg-gray-50 border-b border-gray-200">
+    <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">
+      Find more nearby listings
+    </p>
+  </div>
+  <div class="divide-y divide-gray-100">
+    {regionSlug && regionName && (
+      <a href={`/${stateSlug}/${regionSlug}`} class="flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors group">
+        <span class="text-sm font-medium text-gray-800 group-hover:text-blue-700">
+          More listings in {regionName}
+        </span>
+        <span class="flex items-center gap-1 text-sm text-gray-400 group-hover:text-blue-500">
+          {regionFacilityCount?.toLocaleString() ?? '0'} listings
+          <Icon name="chevronRight" width={14} height={14} />
+        </span>
+      </a>
+    )}
+    <a href={`/${stateSlug}`} class="flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors group">
+      <span class="text-sm font-medium text-gray-800 group-hover:text-blue-700">
+        All public listings in {stateName}
+      </span>
+      <span class="flex items-center gap-1 text-sm text-gray-400 group-hover:text-blue-500">
+        {stateFacilityCount?.toLocaleString() ?? '0'} listings
+        <Icon name="chevronRight" width={14} height={14} />
+      </span>
+    </a>
+  </div>
+</section>

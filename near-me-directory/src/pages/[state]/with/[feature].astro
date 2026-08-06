@@ -1,0 +1,208 @@
+---
+// State-level feature-filter page: /[state]/with/[feature]/
+// Shows all listings in a state with a specific feature
+// Layout uses grid for better scan-ability and SEO (matches region/suburb grid pattern)
+import Layout from '../../../layouts/Layout.astro';
+import StateMap from '../../../components/directory/StateMap.astro';
+import ListingGridCard from '../../../components/directory/ListingGridCard.astro';
+import FeaturePills from '../../../components/directory/FeaturePills.astro';
+import Icon from '../../../components/ui/Icon.astro';
+import { FEATURE_KEYS, type FeatureKey, toSnakeCase, toKebabCase } from '../../../lib/types';
+import { getFeatureLabel } from '../../../lib/feature-icons';
+import { fetchStateListingsByFeature, fetchStateData } from '../../../lib/db';
+import { SITE_URL, SITE_NAME, TWITTER_HANDLE } from '../../../lib/utils/seo';
+import { buildBreadcrumbSchema, buildStateSchema, buildStateFeatureSchema, serializeSchema } from '../../../lib/utils/schema';
+export const prerender = false;
+
+const { state, feature } = Astro.params;
+
+// Validate required params
+if (!state || !feature) {
+  return Astro.redirect('/');
+}
+
+// Convert kebab-case URL param to snake_case for validation (backward compatibility)
+const normalizedFeatureSnake = toSnakeCase(feature.toLowerCase()) as FeatureKey;
+const isValidFeature = FEATURE_KEYS.includes(normalizedFeatureSnake);
+
+// Redirect old snake_case URLs to kebab-case
+const kebabFeature = toKebabCase(feature.toLowerCase());
+if (feature !== kebabFeature) {
+  return Astro.redirect(`/${state.toLowerCase()}/with/${kebabFeature}`, 301);
+}
+
+if (!isValidFeature) {
+  return Astro.redirect(`/${state.toLowerCase()}`);
+}
+
+// Fetch data
+const stateCode = state.toUpperCase();
+const stateSlug = state.toLowerCase();
+const { state: stateData } = await fetchStateData(stateSlug);
+const listings = await fetchStateListingsByFeature(stateCode, normalizedFeatureSnake);
+
+// Redirect if state not found
+if (!stateData) {
+  return Astro.redirect('/');
+}
+
+// Use stateName for cleaner code
+const stateName = stateData.name ?? stateCode;
+const facilitiesData = listings ?? [];
+const featureLabel = getFeatureLabel(normalizedFeatureSnake);
+
+// Build breadcrumbs for schema (use kebab-case for URLs)
+const currentPageUrl = `/${stateSlug}/with/${kebabFeature}`;
+const breadcrumbs = [
+  { label: 'Home', href: '/' },
+  { label: stateName, href: `/${stateSlug}` },
+  { label: `${featureLabel} Facilities`, href: currentPageUrl }, // Current page - full URL for schema
+];
+
+// Build schema objects
+const breadcrumbSchema = buildBreadcrumbSchema(breadcrumbs);
+const stateJsonLd = buildStateSchema({
+  code: stateData.code ?? stateCode,
+  name: stateName,
+  listing_count: stateData.listing_count ?? 0,
+});
+const featureSchema = buildStateFeatureSchema(
+  {
+    code: stateData.code ?? stateCode,
+    name: stateName,
+    listing_count: stateData.listing_count ?? 0,
+  },
+  normalizedFeatureSnake,
+  facilitiesData.length
+);
+
+// Prepare SEO metadata - custom canonical for feature page
+const title = `Find ${featureLabel} Facilities in ${stateName} | Near Me Directory`;
+const description = `Find ${featureLabel.toLowerCase()} public listings in ${stateName}. View addresses, opening hours and ${featureLabel.toLowerCase()} information across ${facilitiesData.length} locations.`;
+const featurePageUrl = `${SITE_URL}/${stateSlug}/with/${kebabFeature}`;
+
+// Base metadata with custom canonical for feature page
+const metadata = {
+  title,
+  description,
+  canonical: featurePageUrl,
+  robots: { index: true, follow: true },
+  openGraph: {
+    siteName: SITE_NAME,
+    type: 'website' as const,
+    title,
+    description,
+    url: featurePageUrl,
+    images: [{ url: `${SITE_URL}/og-default.png`, width: 1200, height: 630, alt: title }],
+  },
+  twitter: {
+    card: 'summary_large_image' as const,
+    site: TWITTER_HANDLE,
+    title,
+    description,
+    images: [`${SITE_URL}/og-default.png`],
+  },
+};
+
+// Map config (state-based defaults)
+const STATE_MAP_CONFIG: Record<string, { lat: number; lng: number; zoom: number }> = {
+  QLD: { lat: -22.0, lng: 144.0, zoom: 6 },
+  NSW: { lat: -32.0, lng: 147.0, zoom: 6 },
+  VIC: { lat: -37.0, lng: 144.5, zoom: 7 },
+  WA:  { lat: -26.0, lng: 121.0, zoom: 5 },
+  SA:  { lat: -30.0, lng: 135.0, zoom: 6 },
+  TAS: { lat: -42.0, lng: 146.5, zoom: 7 },
+  ACT: { lat: -35.5, lng: 149.0, zoom: 9 },
+  NT:  { lat: -19.5, lng: 133.5, zoom: 6 },
+};
+
+const cfg = STATE_MAP_CONFIG[stateData.code ?? stateCode] ?? { lat: -27.5, lng: 133.8, zoom: 5 };
+---
+
+<Layout metadata={metadata}>
+  {/* Structured Data */}
+  <script type="application/ld+json" set:html={serializeSchema(breadcrumbSchema)} />
+  <script type="application/ld+json" set:html={serializeSchema(stateJsonLd)} />
+  <script type="application/ld+json" set:html={serializeSchema(featureSchema)} />
+
+  <!-- State Header Section -->
+  <div class="bg-white border-b border-gray-100">
+    <div class="max-w-5xl mx-auto px-4 py-5">
+      <!-- Breadcrumb -->
+      <nav aria-label="Breadcrumb" class="mb-3">
+        <ol class="flex items-center gap-1 flex-wrap text-xs text-gray-400">
+          {breadcrumbs.map((item, i) => {
+            const isLast = i === breadcrumbs.length - 1;
+            return (
+              <li class="flex items-center gap-1 min-w-0">
+                {i > 0 && <Icon name="chevronRight" size={14} class="text-gray-300 shrink-0" />}
+                {isLast ? (
+                  <span class="text-gray-600 font-medium truncate">{item.label}</span>
+                ) : (
+                  <a href={item.href} class="hover:text-blue-600 transition-colors truncate">
+                    {item.label}
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+
+      <h1 class="text-2xl font-black text-gray-900 mb-2">
+        {featureLabel} Facilities in {stateName}
+      </h1>
+
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-gray-600">
+        <span class="font-semibold text-gray-900">
+          {facilitiesData.length} listings with {featureLabel}
+        </span>
+        <span class="text-gray-300">-</span>
+        <span class="text-gray-500">
+          Find public listings in {stateName}, including {featureLabel.toLowerCase()} options.
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- State Map Section -->
+  <div class="max-w-5xl mx-auto px-0 md:px-4 mt-4 mb-6">
+    <StateMap
+      initialLat={cfg.lat}
+      initialLng={cfg.lng}
+      initialZoom={cfg.zoom}
+      listings={facilitiesData}
+      stateSlug={stateSlug}
+    />
+  </div>
+
+  <!-- Feature Navigation Pills -->
+  <div class="max-w-5xl mx-auto px-4 mb-6">
+    <FeaturePills stateSlug={stateSlug} currentFeature={kebabFeature} />
+  </div>
+
+  <!-- Listing Grid Section -->
+  <main class="max-w-5xl mx-auto px-4 pb-12">
+    {facilitiesData.length > 0 ? (
+      <section>
+        <h2 class="text-lg font-bold text-gray-900 mb-4">All {featureLabel} listings in {stateName}</h2>
+        <ul class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {facilitiesData.map((facility) => (
+            <ListingGridCard
+              key={facility.listing_id}
+              facility={facility}
+              featureKey={normalizedFeatureSnake}
+            />
+          ))}
+        </ul>
+      </section>
+    ) : (
+      <div class="text-center py-12">
+        <p class="text-gray-500 mb-4">No listings found with {featureLabel} in {stateName}.</p>
+        <p class="text-sm text-gray-400">
+          Try checking other states or broadening your search.
+        </p>
+      </div>
+    )}
+  </main>
+</Layout>

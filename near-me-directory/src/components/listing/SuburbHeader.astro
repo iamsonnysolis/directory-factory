@@ -1,0 +1,51 @@
+---
+// SuburbHeader.astro - Breadcrumb, heading, and stats for suburb pages
+// Isolated component following strict Separation of Concerns
+
+import Icon from '../ui/Icon.astro';
+
+interface Props {
+  suburbName: string;
+  facilityCount: number;
+  stateName: string;
+  breadcrumbs: Array<{ label: string; href: string }>;
+}
+
+const { suburbName, facilityCount, stateName, breadcrumbs } = Astro.props;
+
+// Get singular/plural
+const facilityLabel = facilityCount === 1 ? 'facility' : 'listings';
+---
+
+<!-- Breadcrumb -->
+<nav aria-label="Breadcrumb" class="mb-3">
+  <ol class="flex items-center gap-1 flex-wrap text-xs text-gray-400">
+    {breadcrumbs.map((item, i) => {
+      const isLast = i === breadcrumbs.length - 1;
+      return (
+        <li class="flex items-center gap-1 min-w-0">
+          {i > 0 && <Icon name="chevronRight" size={14} class="text-gray-300 shrink-0" />}
+          {isLast ? (
+            <span class="text-gray-600 font-medium truncate">{item.label}</span>
+          ) : (
+            <a href={item.href} class="hover:text-blue-600 transition-colors truncate">{item.label}</a>
+          )}
+        </li>
+      );
+    })}
+  </ol>
+</nav>
+
+<h1 class="text-2xl font-black text-gray-900 mb-2">
+  Public Facilities in {suburbName}
+</h1>
+
+<div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+  <span class="font-semibold text-gray-900">
+    {facilityCount} {facilityLabel} in {suburbName}
+  </span>
+  <span class="text-gray-300">|</span>
+  <span class="text-gray-500">
+    Find public listings in {suburbName}, including open now and accessible options.
+  </span>
+</div>

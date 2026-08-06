@@ -1,0 +1,62 @@
+---
+// NearbyListings.astro - Renders the nearby list with dynamically computed distances and custom routing
+// Icons migrated to Lucide (2026-06-15)
+
+import Icon from '../ui/Icon.astro';
+import { formatDistance } from '../../lib/geo';
+
+export interface Props {
+  nearbyListings: Array<{
+    listing_id: string;
+    slug: string;
+    name: string;
+    suburb?: string;
+    suburb_slug?: string;
+    region_slug?: string;
+    state_code?: string;
+    state?: string;
+    distance_m: number;
+  }> | null;
+  stateSlug?: string;
+}
+
+const { nearbyListings, stateSlug } = Astro.props;
+
+if (!nearbyListings || nearbyListings.length === 0) {
+  return null;
+}
+---
+
+<div class="w-full">
+  <h2 class="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
+    <Icon name="mapPin" class="w-4 h-4 text-gray-400" />
+    Nearby Facilities
+  </h2>
+  <ul class="flex flex-col divide-y divide-gray-100 border border-gray-200 rounded-xl overflow-hidden">
+    {nearbyListings.map((t) => {
+      const stateSegment = t.state || t.state_code || stateSlug || '';
+      const href = stateSegment && t.region_slug && t.suburb_slug && t.slug
+        ? '/' + stateSegment.toLowerCase() + '/' + t.region_slug + '/' + t.suburb_slug + '/' + t.slug
+        : '/';
+      
+      return (
+        <li key={t.listing_id}>
+          <a href={href} class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors group">
+            <span class="shrink-0 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5 min-w-[52px] text-center">
+              {formatDistance(t.distance_m)}
+            </span>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium text-gray-900 group-hover:text-blue-700 truncate transition-colors">
+                {t.name}
+              </p>
+              {t.suburb && (
+                <p class="text-xs text-gray-500 truncate">{t.suburb}</p>
+              )}
+            </div>
+            <Icon name="chevronRight" class="w-4 h-4 shrink-0 text-gray-300 group-hover:text-blue-400 transition-colors" />
+          </a>
+        </li>
+      );
+    })}
+  </ul>
+</div>

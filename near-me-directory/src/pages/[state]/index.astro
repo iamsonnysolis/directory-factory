@@ -1,0 +1,169 @@
+---
+// src/pages/[state]/index.astro - State directory page (SSR)
+// Refactored to use component-driven architecture matching Next.js reference
+import Layout from '../../layouts/Layout.astro';
+import StateMap from '../../components/directory/StateMap.astro';
+import FeaturePills from '../../components/directory/FeaturePills.astro';
+import Icon from '../../components/ui/Icon.astro';
+import EeatContent from '../../components/eeat/EeatContent.astro';
+import { fetchStateData, fetchContent, fetchStateFeatureCounts, fetchStateListings } from '../../lib/db';
+import { getStateMetadata } from '../../lib/utils/seo';
+import { loadSiteConfig } from '../../lib/site-config';
+const siteConfig = await loadSiteConfig();
+import { buildBreadcrumbSchema, buildStateSchema, serializeSchema } from '../../lib/utils/schema';
+import { resolveContent, stateValues } from '../../lib/content-utils';
+
+// State map configuration - geographic center points for each state
+const STATE_MAP_CONFIG: Record<string, { lat: number; lng: number; zoom: number }> = {
+  QLD: { lat: -22.0, lng: 144.0, zoom: 6 },
+  NSW: { lat: -32.0, lng: 147.0, zoom: 6 },
+  VIC: { lat: -37.0, lng: 144.5, zoom: 7 },
+  WA:  { lat: -26.0, lng: 121.0, zoom: 5 },
+  SA:  { lat: -30.0, lng: 135.0, zoom: 6 },
+  TAS: { lat: -42.0, lng: 146.5, zoom: 7 },
+  ACT: { lat: -35.5, lng: 149.0, zoom: 9 },
+  NT:  { lat: -19.5, lng: 133.5, zoom: 6 },
+};
+
+const { state } = Astro.params;
+
+// Validate required params
+if (!state) {
+  return Astro.redirect('/');
+}
+
+// Fetch all data via the database utility
+const stateData = await fetchStateData(state);
+
+// Destructure fetched data
+const { state: stateRecord, regions, stateSlug } = stateData;
+
+// Redirect if not found
+if (!stateRecord) {
+  return Astro.redirect('/');
+}
+
+// Fetch content, feature counts, and state listings in parallel
+const [contentRows, featureCounts, stateFacilities] = await Promise.all([
+  fetchContent('state', stateSlug),
+  fetchStateFeatureCounts(stateRecord.code),
+  fetchStateListings(stateRecord.code),
+]);
+
+// Resolve EEAT content with placeholder replacement
+const content = resolveContent(contentRows, stateValues(stateRecord, featureCounts));
+
+// Build breadcrumbs for schema
+const breadcrumbs = [
+  { label: 'Home', href: '/' },
+  { label: stateRecord.name, href: `/${stateSlug}` },
+];
+
+// Build schema objects
+const breadcrumbSchema = buildBreadcrumbSchema(breadcrumbs);
+const stateJsonLd = buildStateSchema(stateRecord);
+
+// Get SEO metadata
+const metadata = getStateMetadata(stateRecord, siteConfig);
+
+// Map config
+const cfg = STATE_MAP_CONFIG[stateRecord.code] ?? { lat: -27.5, lng: 133.8, zoom: 5 };
+---
+
+<Layout metadata={metadata}>
+  {/* Structured Data */}
+  <script type="application/ld+json" set:html={serializeSchema(breadcrumbSchema)} />
+  <script type="application/ld+json" set:html={serializeSchema(stateJsonLd)} />
+
+  <!-- State Header Section -->
+  <div class="bg-white border-b border-gray-100">
+    <div class="max-w-5xl mx-auto px-4 py-5">
+      <!-- Breadcrumb -->
+      <nav aria-label="Breadcrumb" class="mb-3">
+        <ol class="flex items-center gap-1 flex-wrap text-xs text-gray-400">
+          {breadcrumbs.map((item, i) => {
+            const isLast = i === breadcrumbs.length - 1;
+            return (
+              <li class="flex items-center gap-1 min-w-0">
+                {i > 0 && <Icon name="chevronRight" size={14} class="text-gray-300 shrink-0" />}
+                {isLast ? (
+                  <span class="text-gray-600 font-medium truncate">{item.label}</span>
+                ) : (
+                  <a href={item.href} class="hover:text-blue-600 transition-colors truncate">
+                    {item.label}
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+
+      <h1 class="text-2xl font-black text-gray-900 mb-2">
+        Public Facilities in {stateRecord.name}
+      </h1>
+      <!-- Summary line -- count + regions -->
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-gray-600">
+        <span class="font-semibold text-gray-900">
+          {stateRecord.listing_count?.toLocaleString() ?? '0'} public listings
+        </span>
+        <span class="text-gray-300">- </span>
+        <span>{regions.length} regions</span>
+        <span class="text-gray-300">- </span>
+        <span class="text-gray-500">
+          Find public listings in {stateRecord.name}, including open now and accessible options.
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- State Map Section -->
+  <div class="max-w-5xl mx-auto px-0 md:px-4 mt-4 mb-6">
+    <StateMap
+      initialLat={cfg.lat}
+      initialLng={cfg.lng}
+      initialZoom={cfg.zoom}
+      listings={stateFacilities}
+      stateSlug={stateSlug}
+    />
+  </div>
+
+  <!-- Feature Navigation Pills -->
+  <div class="max-w-5xl mx-auto px-4 mb-6">
+    <FeaturePills stateSlug={stateSlug} />
+  </div>
+
+  <!-- Main Content -->
+  <main class="max-w-5xl mx-auto px-4 pb-12">
+    {/* Region Grid Section */}
+    <section class="mb-10">
+      <h2 class="text-lg font-bold text-gray-900 mb-1">Browse by region</h2>
+      <p class="text-sm text-gray-500 mb-4">
+        Select a region to find listings in specific suburbs.
+      </p>
+      <ul class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {regions.map((region) => (
+          <li key={region.id}>
+            <a
+              href={`/${stateSlug}/${region.slug}`}
+              class="flex items-center justify-between p-4 rounded-xl border border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition-colors group"
+            >
+              <span class="font-medium text-gray-900 group-hover:text-blue-700">
+                {region.name_clean ?? region.name}
+              </span>
+              <span class="text-sm text-gray-400 group-hover:text-blue-500">
+                {region.listing_count?.toLocaleString() ?? '0'} listings
+              </span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    {/* EEAT Content */}
+    <EeatContent
+      content={content}
+      locationName={stateRecord.name}
+    />
+  </main>
+</Layout>

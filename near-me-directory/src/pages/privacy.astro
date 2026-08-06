@@ -1,0 +1,33 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { loadSiteConfig } from '../lib/site-config';
+import { getPrivacyMetadata } from '../lib/utils/seo';
+
+const config = await loadSiteConfig();
+const metadata = getPrivacyMetadata(config);
+
+// Pull legal copy from site_config
+const privacyContent = config.legal_privacy || {
+  last_updated: 'May 2026',
+  sections: [
+    { title: 'Information We Collect', body: 'Near Me Directory does not collect personal information through this website. We may collect anonymous usage data to improve the service.' },
+    { title: 'Data Source', body: 'Our facility location data is sourced from publicly available government datasets and community contributions.' },
+    { title: 'Cookies', body: 'We use minimal cookies necessary for site functionality. No tracking or advertising cookies are used.' },
+    { title: 'Contact', body: 'If you have questions about this privacy policy, please <a href="/contact">contact us</a>.' },
+  ],
+};
+---
+
+<Layout metadata={metadata}>
+  <article class="prose prose-gray max-w-3xl mx-auto">
+    <h1>Privacy Policy</h1>
+    <p>Last updated: {privacyContent.last_updated}</p>
+
+    {privacyContent.sections.map((section) => (
+      <>
+        <h2>{section.title}</h2>
+        <p set:html={section.body}></p>
+      </>
+    ))}
+  </article>
+</Layout>

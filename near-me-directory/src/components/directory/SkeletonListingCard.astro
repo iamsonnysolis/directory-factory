@@ -1,0 +1,28 @@
+---
+// SkeletonListingCard.astro - Loading placeholder matching ListingCard structure
+// Used during data fetch to show shimmer placeholders
+---
+
+<div class="facility-card-item relative px-4 py-4 bg-white border-b border-gray-100">
+  <div class="animate-pulse">
+    <!-- Name line -->
+    <div class="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
+    <!-- Distance badge area -->
+    <div class="h-3 bg-gray-200 rounded w-1/2 mb-1"></div>
+    
+    <!-- Address line -->
+    <div class="h-3 bg-gray-200 rounded w-5/6 mb-3"></div>
+    
+    <!-- Pills area -->
+    <div class="flex flex-wrap gap-1.5 mb-3">
+      <div class="h-5 bg-gray-200 rounded-full w-16"></div>
+      <div class="h-5 bg-gray-200 rounded-full w-20"></div>
+    </div>
+    
+    <!-- Button area -->
+    <div class="flex gap-2">
+      <div class="flex-1 h-10 bg-gray-200 rounded-xl"></div>
+      <div class="w-24 h-10 bg-gray-200 rounded-xl"></div>
+    </div>
+  </div>
+</div>

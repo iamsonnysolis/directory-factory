@@ -1,0 +1,198 @@
+---
+// Suburb-level feature-filter page: /[state]/[region]/[suburb]/with/[feature]/
+// Shows all listings in a suburb with a specific feature
+// Layout uses grid for better scan-ability and SEO
+import Layout from '../../../../../layouts/Layout.astro';
+import SuburbMap from '../../../../../components/listing/SuburbMap.astro';
+import ListingGridCard from '../../../../../components/directory/ListingGridCard.astro';
+import FeaturePills from '../../../../../components/directory/FeaturePills.astro';
+import Icon from '../../../../../components/ui/Icon.astro';
+import { FEATURE_KEYS, type FeatureKey, toSnakeCase, toKebabCase } from '../../../../../lib/types';
+import { getFeatureLabel } from '../../../../../lib/feature-icons';
+import { fetchSuburbListingsByFeature, fetchSuburbData } from '../../../../../lib/db';
+import { SITE_URL, SITE_NAME, TWITTER_HANDLE } from '../../../../../lib/utils/seo';
+import { buildBreadcrumbSchema, buildSuburbSchema, buildSuburbFeatureSchema, serializeSchema } from '../../../../../lib/utils/schema';
+export const prerender = false;
+
+const { state, region, suburb, feature } = Astro.params;
+
+// Validate required params
+if (!state || !region || !suburb || !feature) {
+  return Astro.redirect('/');
+}
+
+// Convert kebab-case URL param to snake_case for validation (backward compatibility)
+const normalizedFeatureSnake = toSnakeCase(feature.toLowerCase()) as FeatureKey;
+const isValidFeature = FEATURE_KEYS.includes(normalizedFeatureSnake);
+
+// Redirect old snake_case URLs to kebab-case
+const kebabFeature = toKebabCase(feature.toLowerCase());
+if (feature !== kebabFeature) {
+  return Astro.redirect(`/${state.toLowerCase()}/${region}/${suburb}/with/${kebabFeature}`, 301);
+}
+
+// Fetch data
+const stateCode = state.toUpperCase();
+const stateSlug = state.toLowerCase();
+const regionSlug = region;
+const suburbSlug = suburb;
+const { state: stateData, region: regionData, suburb: suburbData } = await fetchSuburbData(stateSlug, regionSlug, suburbSlug);
+const listings = await fetchSuburbListingsByFeature(stateCode, regionSlug, suburbSlug, normalizedFeatureSnake);
+
+// Redirect checks
+if (!stateData) {
+  return Astro.redirect('/');
+}
+
+if (!regionData) {
+  return Astro.redirect(`/${stateSlug}`);
+}
+
+if (!suburbData) {
+  return Astro.redirect(`/${stateSlug}/${regionSlug}`);
+}
+
+// Prepare variables
+const suburbName = suburbData.name ?? suburbSlug;
+const facilitiesData = listings ?? [];
+const featureLabel = getFeatureLabel(normalizedFeatureSnake);
+
+// Build breadcrumbs for schema (use kebab-case for URLs)
+const currentPageUrl = `/${stateSlug}/${regionSlug}/${suburbSlug}/with/${kebabFeature}`;
+const breadcrumbs = [
+  { label: 'Home', href: '/' },
+  { label: stateData.name ?? stateCode, href: `/${stateSlug}` },
+  { label: regionData.name_clean ?? regionData.name ?? regionSlug, href: `/${stateSlug}/${regionSlug}` },
+  { label: suburbName, href: `/${stateSlug}/${regionSlug}/${suburbSlug}` },
+  { label: `${featureLabel} Facilities`, href: currentPageUrl }, // Current page - full URL for schema
+];
+
+// Build schema objects
+const breadcrumbSchema = buildBreadcrumbSchema(breadcrumbs);
+const suburbSchema = buildSuburbSchema(
+  stateSlug,
+  { name_clean: regionData.name_clean ?? regionData.name ?? '', slug: regionSlug, listing_count: regionData.listing_count ?? 0 },
+  { name: suburbName, slug: suburbSlug, listing_count: suburbData.listing_count ?? 0, region_slug: suburbData.region_slug ?? '' }
+);
+const featureSchema = buildSuburbFeatureSchema(
+  { code: stateData.code ?? stateCode, name: stateData.name ?? stateCode, listing_count: stateData.listing_count ?? 0 },
+  { name_clean: regionData.name_clean ?? regionData.name ?? '', slug: regionSlug, listing_count: regionData.listing_count ?? 0 },
+  { name: suburbName, slug: suburbSlug, listing_count: suburbData.listing_count ?? 0, region_slug: suburbData.region_slug ?? '' },
+  normalizedFeatureSnake,
+  facilitiesData.length
+);
+
+// Prepare SEO metadata - custom canonical for feature page
+const featurePageUrl = `${SITE_URL}/${stateSlug}/${regionSlug}/${suburbSlug}/with/${kebabFeature}`;
+const title = `Find ${featureLabel} Facilities in ${suburbName} | Near Me Directory`;
+const description = `Find ${featureLabel.toLowerCase()} public listings in ${suburbName}. View addresses, opening hours and ${featureLabel.toLowerCase()} information across ${facilitiesData.length} locations.`;
+
+const metadata = {
+  title,
+  description,
+  canonical: featurePageUrl,
+  robots: { index: true, follow: true },
+  openGraph: {
+    siteName: SITE_NAME,
+    type: 'website' as const,
+    title,
+    description,
+    url: featurePageUrl,
+    images: [{ url: `${SITE_URL}/og-default.png`, width: 1200, height: 630, alt: title }],
+  },
+  twitter: {
+    card: 'summary_large_image' as const,
+    site: TWITTER_HANDLE,
+    title,
+    description,
+    images: [`${SITE_URL}/og-default.png`],
+  },
+};
+---
+
+<Layout metadata={metadata}>
+  {/* Structured Data */}
+  <script type="application/ld+json" set:html={serializeSchema(breadcrumbSchema)} />
+  <script type="application/ld+json" set:html={serializeSchema(suburbSchema)} />
+  <script type="application/ld+json" set:html={serializeSchema(featureSchema)} />
+
+  <!-- Suburb Header Section -->
+  <div class="bg-white border-b border-gray-100">
+    <div class="max-w-5xl mx-auto px-4 pt-5 pb-5">
+      <!-- Breadcrumb -->
+      <nav aria-label="Breadcrumb" class="mb-3">
+        <ol class="flex items-center gap-1 flex-wrap text-xs text-gray-400">
+          {breadcrumbs.map((item, i) => {
+            const isLast = i === breadcrumbs.length - 1;
+            return (
+              <li class="flex items-center gap-1 min-w-0">
+                {i > 0 && <Icon name="chevronRight" size={14} class="text-gray-300 shrink-0" />}
+                {isLast ? (
+                  <span class="text-gray-600 font-medium truncate">{item.label}</span>
+                ) : (
+                  <a href={item.href} class="hover:text-blue-600 transition-colors truncate">
+                    {item.label}
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+
+      <h1 class="text-2xl font-black text-gray-900 mb-2">
+        {featureLabel} Facilities in {suburbName}
+      </h1>
+
+      <p class="text-sm text-gray-500 mb-4">
+        Find {featureLabel.toLowerCase()} listings in {suburbName}. Addresses and opening hours below.
+      </p>
+    </div>
+  </div>
+
+  <!-- Map Section -->
+  <div class="max-w-5xl mx-auto px-0 md:px-4 mt-4 mb-6">
+    <SuburbMap
+      suburbName={suburbName}
+      listings={facilitiesData}
+      suburbLat={suburbData.latitude}
+      suburbLng={suburbData.longitude}
+      stateSlug={stateSlug}
+    />
+  </div>
+
+  <!-- Feature Navigation Pills -->
+  <div class="max-w-5xl mx-auto px-4 mb-6">
+    <FeaturePills 
+      stateSlug={stateSlug} 
+      regionSlug={regionSlug}
+      suburbSlug={suburbSlug}
+      currentFeature={kebabFeature} 
+    />
+  </div>
+
+  <!-- Listing Grid Section -->
+  <main class="max-w-5xl mx-auto px-4 pb-12">
+    {facilitiesData.length > 0 ? (
+      <section>
+        <h2 class="text-lg font-bold text-gray-900 mb-4">All {featureLabel} listings in {suburbName}</h2>
+        <ul class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {facilitiesData.map((facility) => (
+            <ListingGridCard
+              key={facility.listing_id}
+              facility={facility}
+              featureKey={normalizedFeatureSnake}
+            />
+          ))}
+        </ul>
+      </section>
+    ) : (
+      <div class="text-center py-12">
+        <p class="text-gray-500 mb-4">No listings found with {featureLabel} in {suburbName}.</p>
+        <p class="text-sm text-gray-400">
+          Try checking other suburbs or broadening your search.
+        </p>
+      </div>
+    )}
+  </main>
+</Layout>

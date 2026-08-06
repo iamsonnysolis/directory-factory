@@ -1,0 +1,32 @@
+---
+// InsightCallout.astro - Key finding with tinted background and topic-color border-left
+// Props: topic (primary|family|hours|gap|good|neutral), icon (optional)
+
+import Icon from '../ui/Icon.astro';
+
+interface Props {
+  topic?: 'primary' | 'family' | 'hours' | 'gap' | 'good' | 'neutral';
+  icon?: string; // Icon name: accessibility, baby, clock, etc.
+}
+
+const { topic = 'neutral', icon } = Astro.props;
+
+const topicColors = {
+  primary: { name: 'blue', icon: 'accessibility' },
+  family: { name: 'teal', icon: 'baby' },
+  hours: { name: 'amber', icon: 'clock' },
+  gap: { name: 'red', icon: 'alertCircle' },
+  good: { name: 'green', icon: 'check' },
+  neutral: { name: 'gray', icon: 'info' }
+};
+
+const color = topicColors[topic].name;
+const defaultIcon = topicColors[topic].icon;
+---
+
+<div class={"flex gap-3 p-4 mb-4 bg-" + color + "-50 border-l-4 border-" + color + "-500 rounded-r-lg"}>
+  <Icon name={icon || defaultIcon} size={24} class={"w-6 h-6 text-" + color + "-600 flex-shrink-0"} />
+  <div class="text-gray-800">
+    <slot />
+  </div>
+</div>

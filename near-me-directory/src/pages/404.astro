@@ -1,0 +1,58 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { loadSiteConfig } from '../lib/site-config';
+import { get404Metadata } from '../lib/utils/seo';
+
+const config = await loadSiteConfig();
+const metadata = get404Metadata(config);
+---
+
+<Layout metadata={metadata}>
+  <div class="min-h-screen bg-slate-50 flex flex-col items-center justify-center px-6 text-center">
+
+    {/* Big emoji stack */}
+    <div class="text-7xl mb-2 select-none" aria-hidden="true">🔍</div>
+    <div class="text-4xl mb-8 select-none" aria-hidden="true">💨</div>
+
+    {/* Error tag */}
+    <p class="text-xs font-black tracking-[0.3em] text-blue-600 uppercase mb-3">
+      Error 404
+    </p>
+
+    {/* Headline */}
+    <h1 class="text-3xl font-black text-gray-900 mb-4 leading-tight max-w-sm">
+      We looked everywhere.<br />This page doesn't exist.
+    </h1>
+
+    {/* Message */}
+    <p class="text-gray-500 text-base mb-2 max-w-xs leading-relaxed">
+      The page you're looking for has vanished into the digital ether.
+    </p>
+    <p class="text-gray-400 text-sm mb-10 max-w-xs">
+      Don't worry — you can find your way back.
+    </p>
+
+    {/* Actions */}
+    <div class="flex flex-col sm:flex-row items-center gap-3">
+      <a
+        href="/"
+        class="inline-flex items-center gap-2.5 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-2xl shadow-md shadow-blue-200 transition-colors"
+      >
+        🔍 Find listings
+      </a>
+      <a
+        href="/"
+        class="inline-flex items-center gap-2 px-6 py-3 bg-white hover:bg-gray-50 text-gray-600 font-semibold text-sm rounded-2xl border border-gray-200 shadow-sm transition-colors"
+      >
+        ← Back to safety
+      </a>
+    </div>
+
+    {/* Fine print */}
+    <p class="mt-14 text-xs text-gray-300 max-w-[260px] leading-snug">
+      Fun fact: There are more pages in the internet than grains of sand on a beach.
+      This page will not be one of them.
+    </p>
+
+  </div>
+</Layout>

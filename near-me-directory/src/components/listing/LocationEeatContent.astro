@@ -1,0 +1,116 @@
+---
+// SuburbEeatContent.astro - EEAT content blocks for suburb pages
+// Icons migrated to Lucide (2026-06-15)
+// Renders about, local_context, where_to_find, accessibility, tips, faq
+
+import Icon from '../ui/Icon.astro';
+
+interface Props {
+  content: {
+    about?: string;
+    local_context?: string;
+    where_to_find?: string;
+    accessibility?: string;
+    tips?: string[];
+    faq?: string[];
+  };
+  locationName: string;
+}
+
+const { content, locationName } = Astro.props;
+
+const hasAny = content.about || content.local_context || content.where_to_find ||
+  content.accessibility || (content.tips && content.tips.length > 0) ||
+  (content.faq && content.faq.length > 0);
+---
+
+{hasAny && (
+  <div class="max-w-3xl space-y-10">
+    {/* About */}
+    {content.about && (
+      <section>
+        <h2 class="text-lg font-bold text-gray-900 mb-3">
+          About public listings in {locationName}
+        </h2>
+        <p class="text-sm text-gray-700 leading-relaxed">{content.about}</p>
+      </section>
+    )}
+
+    {/* Local context */}
+    {content.local_context && (
+      <section>
+        <h2 class="text-lg font-bold text-gray-900 mb-3">
+          Getting around {locationName}
+        </h2>
+        <p class="text-sm text-gray-700 leading-relaxed">{content.local_context}</p>
+      </section>
+    )}
+
+    {/* Where to find */}
+    {content.where_to_find && (
+      <section>
+        <h2 class="text-lg font-bold text-gray-900 mb-3">
+          Where to find public listings in {locationName}
+        </h2>
+        <p class="text-sm text-gray-700 leading-relaxed">{content.where_to_find}</p>
+      </section>
+    )}
+
+    {/* Accessibility */}
+    {content.accessibility && (
+      <section>
+        <h2 class="text-lg font-bold text-gray-900 mb-3">
+          Accessible listings in {locationName}
+        </h2>
+        <p class="text-sm text-gray-700 leading-relaxed">{content.accessibility}</p>
+      </section>
+    )}
+
+    {/* Tips */}
+    {content.tips && content.tips.length > 0 && (
+      <section>
+        <h2 class="text-lg font-bold text-gray-900 mb-3">
+          Tips for finding listings in {locationName}
+        </h2>
+        <ul class="space-y-2.5">
+          {content.tips.map((tip, i) => (
+            <li key={i} class="flex items-start gap-2.5 text-sm text-gray-700">
+              <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" aria-hidden="true"></span>
+              {tip}
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    {/* FAQ */}
+    {content.faq && content.faq.length > 0 && (
+      <section>
+        <h2 class="text-lg font-bold text-gray-900 mb-3">
+          Frequently asked questions
+        </h2>
+        <div class="space-y-2">
+          {content.faq.map((item, i) => {
+            // Parse "Q: ... A: ..." format
+            const match = item.match(/^Q:\s*(.+?)\s*A:\s*([\s\S]+)$/);
+            if (match) {
+              const [, q, a] = match;
+              return (
+                <details key={i} class="group rounded-xl border border-gray-200 overflow-hidden">
+                  <summary class="flex items-start justify-between gap-3 px-4 py-3.5 cursor-pointer list-none select-none hover:bg-gray-50 transition-colors">
+                    <span class="text-sm font-semibold text-gray-900 leading-snug pr-2">{q}</span>
+                    <Icon name="chevronDown" width={14} height={14} class="shrink-0 mt-0.5 text-gray-400 transition-transform duration-200 group-open:rotate-180" aria-hidden="true" />
+                  </summary>
+                  <div class="px-4 pt-1 pb-4 border-t border-gray-100">
+                    <p class="text-sm text-gray-600 leading-relaxed">{a.trim()}</p>
+                  </div>
+                </details>
+              );
+            }
+            return <p key={i} class="text-sm text-gray-700 leading-relaxed">{item}</p>;
+          })}
+        </div>
+      </section>
+    )}
+  </div>
+)}
