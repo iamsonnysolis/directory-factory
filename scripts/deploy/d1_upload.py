@@ -1,6 +1,6 @@
 """D1 Upload Module (Phase 4)
 
-Takes cleaned + enriched records from ``data/enriched_<project_id>.jsonl``
+Takes cleaned + enriched records from ``data/<project_id>/enriched/*.jsonl``
 and uploads them into a per-directory Cloudflare D1 database via the
 Cloudflare REST API, using the exact schema defined in ``Data-Model-Spec.md``.
 
@@ -504,7 +504,7 @@ def upload_project(project_id: int, params: dict) -> dict:
 
     Args:
         project_id: The collection project ID (determines which
-            ``data/enriched_<project_id>.jsonl`` file to read).
+            ``data/<project_id>/enriched/*.jsonl`` files to read).
         params: Must include:
             - ``d1_account_id``: Cloudflare account ID
             - ``d1_database_id``: D1 database ID
