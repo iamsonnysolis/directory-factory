@@ -418,8 +418,9 @@ def compute_quality_score(cleaned_record: dict, enriched_record: dict | None = N
 # Content type sets — align with Data-Model-Spec.md §Content Model
 GEO_CONTENT_TYPES = ["about", "local_context", "faq", "tips", "meta_title",
                       "meta_description", "seo_keywords"]
-BUSINESS_CONTENT_TYPES = ["about", "meta_title", "meta_description",
-                           "seo_keywords", "services", "specialties"]
+# Business-level content: local_context is geo-only (per Data-Model-Spec.md §Content Model)
+BUSINESS_CONTENT_TYPES = ["about", "faq", "tips", "meta_title",
+                          "meta_description", "seo_keywords"]
 
 
 def _build_geo_prompt(entity_type: str, entity_name: str,
@@ -469,7 +470,8 @@ Return ONLY a JSON object with keys matching the content type names:
 
 
 def _build_geo_content(entity_type: str, entity_name: str,
-                       state_code: str, business_count: int,
+                       state_code: str, slug: str,
+                       business_count: int,
                        feature_counts: dict, content_types: list[str]) -> list[dict]:
     """Generate geography-level EEAT content and return as content rows.
 
@@ -489,7 +491,10 @@ def _build_geo_content(entity_type: str, entity_name: str,
 
     now = _utcnow_iso()
     rows = []
-    entity_id = f"{entity_type}:{_slugify(entity_name) or entity_name}"
+    if entity_type == "state":
+        entity_id = state_code  # states keyed by code (e.g. "QLD")
+    else:
+        entity_id = f"{slug}:{state_code}"  # region/suburb: slug:state_code
     for ct in content_types:
         body = result.get(ct)
         if not body:
@@ -607,6 +612,7 @@ if __name__ == "__main__":
             # Compute quality score
             score = compute_quality_score(biz, None)
             biz["quality_score"] = score
+            biz["enriched_at"] = _utcnow_iso()
 
             # AI content
             if skip_ai:
@@ -624,9 +630,8 @@ if __name__ == "__main__":
                 if "enrichment" in biz:
                     now = biz["enrichment"].get("generated_at", _utcnow_iso())
                     entity_id = biz.get("place_id") or ""
-                    base_types = ["about", "meta_title", "meta_description",
-                                  "seo_keywords", "services", "specialties"]
-                    for ct in base_types:
+                    content_types = BUSINESS_CONTENT_TYPES
+                    for ct in content_types:
                         val = biz["enrichment"].get(ct)
                         if not val:
                             continue
@@ -694,7 +699,7 @@ if __name__ == "__main__":
                 # Map state_code (e.g. "QLD") to state_long for the prompt name
                 name = st.get("name", code)
                 content_rows.extend(_build_geo_content(
-                    "state", name, code, bcount, fcounts,
+                    "state", name, code, st.get("slug", ""), bcount, fcounts,
                     GEO_CONTENT_TYPES,
                 ))
 
@@ -706,7 +711,7 @@ if __name__ == "__main__":
                 fcounts = _compute_geo_feature_counts(biz_by_region.get(rkey, []))
                 name = reg.get("name", reg.get("slug", ""))
                 content_rows.extend(_build_geo_content(
-                    "region", name, sc, bcount, fcounts,
+                    "region", name, sc, reg.get("slug", ""), bcount, fcounts,
                     GEO_CONTENT_TYPES,
                 ))
 
@@ -718,7 +723,7 @@ if __name__ == "__main__":
                 fcounts = _compute_geo_feature_counts(biz_by_suburb.get(skey, []))
                 name = sub.get("name", sub.get("slug", ""))
                 content_rows.extend(_build_geo_content(
-                    "suburb", name, sc, bcount, fcounts,
+                    "suburb", name, sc, sub.get("slug", ""), bcount, fcounts,
                     GEO_CONTENT_TYPES,
                 ))
 

@@ -787,37 +787,33 @@ def upload_project(project_id: int, params: dict) -> dict:
         ai_model = crow.get("ai_model") or "gemini-2.5-flash-lite"
 
         # Resolve natural key entity_id → real D1 id
+        # Spec format (per Data-Model-Spec.md §Intermediate Pipeline Data Format):
+        #   state:   entity_id = code (e.g. "QLD")
+        #   region:  entity_id = "slug:state_code" (e.g. "brisbane:QLD")
+        #   suburb:  entity_id = "slug:state_code" (e.g. "west-end:QLD")
+        #   business: entity_id = google_place_id
         real_id = None
         if etype == "state":
-            # entity_id is the state code (e.g. "QLD")
+            # entity_id is the state code directly
             real_id = state_id_map.get(eid)
         elif etype == "region":
-            # entity_id format: "region:slug" per enrichment spec
+            # entity_id format: "slug:state_code" (e.g. "brisbane:QLD")
             if eid and ":" in eid:
-                _, slug = eid.split(":", 1)
+                slug, state_code = eid.split(":", 1)
+                real_id = region_id_map.get((slug, state_code))
             else:
-                slug = eid
-            # Need state_code to look up — parse from the region record
-            real_id = None
-            for reg in regions:
-                if reg.get("slug") == slug:
-                    sc = reg.get("state_code", "")
-                    real_id = region_id_map.get((slug, sc))
-                    break
+                logger.warning(f"Region content row has invalid entity_id '{eid}' — skipping")
+                continue
         elif etype == "suburb":
-            # entity_id format: "suburb:slug"
+            # entity_id format: "slug:state_code" (e.g. "west-end:QLD")
             if eid and ":" in eid:
-                _, slug = eid.split(":", 1)
+                slug, state_code = eid.split(":", 1)
+                real_id = suburb_id_map.get((slug, state_code))
             else:
-                slug = eid
-            real_id = None
-            for sub in suburbs:
-                if sub.get("slug") == slug:
-                    sc = sub.get("state_code", "")
-                    real_id = suburb_id_map.get((slug, sc))
-                    break
+                logger.warning(f"Suburb content row has invalid entity_id '{eid}' — skipping")
+                continue
         elif etype == "business":
-            # entity_id is the google_place_id (place_id)
+            # entity_id is the google_place_id (same as place_id)
             real_id = id_map.get(eid)
 
         if real_id is None:
