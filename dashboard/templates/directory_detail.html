@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} — Directory Factory{% endblock %}
+
+{% block content %}
+<div class="detail-header">
+  <div>
+    <a href="/">&larr; Back to Overview</a>
+    <h1>{{ project.name }}</h1>
+  </div>
+  <button class="btn">Delete…</button>
+</div>
+
+<div class="tab-bar">
+  <button class="tab active" data-tab="collect">Collect</button>
+  <button class="tab" data-tab="clean">Clean</button>
+  <button class="tab" data-tab="enrich">Enrich</button>
+  <button class="tab" data-tab="upload">Upload</button>
+  <button class="tab" data-tab="deploy">Deploy</button>
+  <button class="tab" data-tab="stats">Live Stats</button>
+  <button class="tab" data-tab="config">Config</button>
+  <button class="tab" data-tab="runs">Runs</button>
+</div>
+
+<div class="tab-panels">
+  <!-- Collect Tab -->
+  <div class="tab-panel active" id="tab-collect">
+    <div class="stage-panel">
+      <div class="stage-panel-header">
+        <div>
+          <div class="headline">Collection</div>
+          <div class="subhead">{{ place_count }} places collected</div>
+        </div>
+        <button class="btn" onclick="runScript('collection.collect', {{ project.id }, {})}">Re-run Collection</button>
+      </div>
+      {% if job_counts %}
+      <div class="project-meta">
+        {% for status, count in job_counts.items() %}
+        <span><span class="count">{{ count }}</span> {{ status }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <p style="margin: 12px 0 0;">Map + places search/filter table (Phase 8.6 — port from dataset-collector)</p>
+    </div>
+  </div>
+
+  <!-- Clean Tab -->
+  <div class="tab-panel" id="tab-clean">
+    <div class="stage-panel">
+      <div class="stage-panel-header">
+        <div>
+          <div class="headline">Cleaning</div>
+          <div class="subhead">{{ place_count }} places cleaned</div>
+        </div>
+        <button class="btn" onclick="runScript('cleaning.clean', {{ project.id }}, {dry_run: false})">Re-run Cleaning</button>
+      </div>
+      <div class="subhead">Last run: —</div>
+      <button class="btn" data-action="toggle-log" style="margin-top:8px;">▾ View full log</button>
+      <div class="log-view" style="display:none;">Full stdout/stderr from runs.db will appear here.</div>
+      <div style="margin-top: 16px;">
+        <div class="subhead">Feature Taxonomy</div>
+        <p style="font-size:13px;color:#666;margin:4px 0 12px;">Per-niche feature keys (Phase 2.3 — awaiting your review before extraction logic runs)</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Enrich Tab -->
+  <div class="tab-panel" id="tab-enrich">
+    <div class="stage-panel">
+      <div class="stage-panel-header">
+        <div>
+          <div class="headline">Enrichment</div>
+          <div class="subhead">AI content + quality scores</div>
+        </div>
+        <button class="btn" onclick="runScript('enrichment.enrich', {{ project.id }}, {'skip_ai': false})">Re-run Enrichment</button>
+      </div>
+      <div class="subhead">Last run: —</div>
+      <button class="btn" data-action="toggle-log" style="margin-top:8px;">▾ View full log</button>
+      <div class="log-view" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- Upload Tab -->
+  <div class="tab-panel" id="tab-upload">
+    <div class="stage-panel">
+      <div class="stage-panel-header">
+        <div>
+          <div class="headline">D1 Upload</div>
+          <div class="subhead">Flat per-table pipeline (dry-run mode available)</div>
+        </div>
+        <button class="btn" onclick="runScript('upload.d1', {{ project.id }}, {'dry_run': true})">Dry-Run Upload</button>
+      </div>
+      <div class="subhead">Last run: —</div>
+      <button class="btn" data-action="toggle-log" style="margin-top:8px;">▾ View full log</button>
+      <div class="log-view" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- Deploy Tab -->
+  <div class="tab-panel" id="tab-deploy">
+    <div class="stage-panel">
+      <div class="stage-panel-header">
+        <div>
+          <div class="headline">Deploy</div>
+          <div class="subhead">Domain: —</div>
+        </div>
+        <button class="btn" onclick="runScript('deploy.provision', {{ project.id }}, {'domain': 'example.com'})">Deploy Site</button>
+      </div>
+      <button class="btn" data-action="toggle-log" style="margin-top:8px;">▾ View full log</button>
+      <div class="log-view" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- Live Stats Tab -->
+  <div class="tab-panel" id="tab-stats">
+    <div class="stage-panel">
+      <div class="stage-panel-header">
+        <div>
+          <div class="headline">Live Stats</div>
+          <div class="subhead">Cloudflare Analytics pass-through (Phase 8.10)</div>
+        </div>
+      </div>
+      <p style="font-size:13px;color:#666;">Deploy this directory to see live stats.</p>
+    </div>
+  </div>
+
+  <!-- Config Tab -->
+  <div class="tab-panel" id="tab-config">
+    <div class="config-layout">
+      <form class="form-col" id="config-form">
+        <div class="form-group">
+          <label>Site name</label>
+          <input type="text" name="site_name" placeholder="e.g. Mobile Dog Groomers">
+        </div>
+        <div class="form-group">
+          <label>Tagline</label>
+          <input type="text" name="tagline" placeholder="Professional dog grooming in Brisbane">
+        </div>
+        <div class="form-group">
+          <label>Niche label</label>
+          <input type="text" name="niche_label" value="mobile_dog_groomers">
+        </div>
+        <div class="form-group">
+          <label>Domain</label>
+          <input type="text" name="domain" placeholder="e.g. doggroomers.example.com">
+        </div>
+        <div class="form-group">
+          <label>Primary color</label>
+          <input type="text" name="theme_primary_color" placeholder="#14b8a3">
+        </div>
+        <div class="form-group">
+          <label>Secondary color</label>
+          <input type="text" name="theme_secondary_color" placeholder="#1e293b">
+        </div>
+        <div class="form-group">
+          <label>Logo URL</label>
+          <input type="text" name="logo_url" placeholder="https://example.com/logo.png">
+        </div>
+        <div class="form-group">
+          <label>Contact email</label>
+          <input type="email" name="contact_email">
+        </div>
+        <div class="form-group">
+          <label>Contact phone</label>
+          <input type="text" name="contact_phone">
+        </div>
+        <div class="form-group">
+          <label>Social links (JSON)</label>
+          <textarea name="social_links" placeholder='{"facebook":"...","instagram":"..."}'></textarea>
+        </div>
+        <div class="form-group">
+          <label>Privacy copy</label>
+          <textarea name="legal_privacy_copy" rows="3"></textarea>
+        </div>
+        <div class="form-group">
+          <label>Terms copy</label>
+          <textarea name="legal_terms_copy" rows="3"></textarea>
+        </div>
+        <div class="form-group">
+          <label>OG image URL</label>
+          <input type="text" name="og_image_url" placeholder="https://example.com/og.png">
+        </div>
+        <button type="submit" class="btn btn-primary">Save Config</button>
+      </form>
+      <div class="config-preview">
+        <div class="hero">
+          <div class="logo-placeholder">LOGO</div>
+          <div>
+            <h3 id="preview-site-name">Site Name</h3>
+            <p id="preview-tagline" style="font-size:13px;color:#666;">Tagline text</p>
+          </div>
+        </div>
+        <p style="font-size:12px;color:#999">Mini hero mockup in dashboard CSS</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Runs Tab -->
+  <div class="tab-panel" id="tab-runs">
+    <div class="stage-panel">
+      <div class="stage-panel-header">
+        <div>
+          <div class="headline">Run History</div>
+          <div class="subhead">Recent pipeline runs for this directory</div>
+        </div>
+      </div>
+      {% if recent_runs %}
+      <table class="table">
+        <thead>
+          <tr><th>Script</th><th>Status</th><th>Started</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for run in recent_runs %}
+          <tr>
+            <td>{{ run.script_name }}</td>
+            <td><span class="status-pill status-{{ run.status }}">{{ run.status }}</span></td>
+            <td>{{ run.started_at or '—' }}</td>
+            <td><button class="btn" style="padding:4px 8px;font-size:12px;">View log</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p style="font-size:13px;color:#666">No runs yet.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

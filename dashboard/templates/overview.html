@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Directory Factory — Overview{% endblock %}
+
+{% block content %}
+<div class="overview-header">
+  <h1>Directories</h1>
+  <button class="btn btn-primary" id="open-new-directory">＋ New Directory</button>
+</div>
+
+<div class="project-grid">
+  {% for proj in projects %}
+  <div class="project-card">
+    <div class="project-card-header">
+      <div>
+        <div class="project-card-name">{{ proj.name }}</div>
+        <div class="project-meta">
+          <span>{{ proj.field_tier or '—' }}</span>
+          <span>•</span>
+          <span class="count">{{ proj.place_count }} places</span>
+        </div>
+      </div>
+      <span class="status-pill status-running">● Enriching</span>
+    </div>
+
+    <div class="pipeline-stepper">
+      {% set stages = [
+        ('collection.collect', 'collected', 'done'),
+        ('cleaning.clean', 'cleaned', 'done'),
+        ('enrichment.enrich', 'enriched', 'running'),
+        ('upload.d1', 'uploaded', 'not_started'),
+        ('deploy.provision', 'deployed', 'not_started'),
+      ] %}
+      {% for script, label, state in stages %}
+        {% if not loop.first %}<div class="dot-divider"></div>{% endif %}
+        <div class="pipeline-dot dot-{{ state }}" title="{{ label }}"></div>
+      {% endfor %}
+    </div>
+
+    <div class="project-card-footer">
+      <span class="updated">Updated {{ proj.created_at.split('T')[0] if proj.created_at else '—' }}</span>
+      <a href="/directories/{{ proj.id }}" class="btn">View</a>
+    </div>
+  </div>
+  {% else %}
+  <div class="card-empty">
+    <p>No directories found. Create one to get started.</p>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- New Directory Modal -->
+<div class="modal-overlay" id="new-directory-modal">
+  <div class="modal">
+    <button class="btn" id="close-modal" style="float:right;border:none;font-size:18px;">×</button>
+    <h2>New Directory</h2>
+    <form id="create-directory-form" method="POST" action="/api/projects">
+      <div class="form-group">
+        <label for="dir-name">Name</label>
+        <input type="text" id="dir-name" name="name" required placeholder="e.g. Mobile Dog Groomers">
+      </div>
+      <div class="form-group">
+        <label for="dir-slug">Slug (auto-generated, editable)</label>
+        <input type="text" id="dir-slug" name="slug" required>
+      </div>
+      <div class="form-group">
+        <label for="dir-niche">Niche label</label>
+        <input type="text" id="dir-niche" name="niche_label" value="local_service_business">
+      </div>
+      <div class="form-group">
+        <label for="dir-domain">Domain</label>
+        <input type="text" id="dir-domain" name="domain" placeholder="e.g. doggroomers.example.com">
+      </div>
+      <div class="form-group">
+        <label for="search-terms-input">Search terms (press Enter to add)</label>
+        <div id="search-terms-tags"></div>
+        <input type="text" id="search-terms-input" name="search_terms_input" placeholder="e.g. dog grooming brisbane">
+        <input type="hidden" id="search_terms" name="search_terms" value="[]">
+      </div>
+      <div class="form-group">
+        <label for="dir-tier">Field tier</label>
+        <select id="dir-tier" name="field_tier">
+          <option value="Essentials">Essentials</option>
+          <option value="Pro">Pro</option>
+          <option value="Enterprise" selected>Enterprise</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="cancel-modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create Directory</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+  // Pre-fill slug from existing project data if editing
+  document.getElementById('dir-name').addEventListener('input', function() {
+    const slug = this.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    document.getElementById('dir-slug').value = slug;
+  });
+</script>
+{% endblock %}
