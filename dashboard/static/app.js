@@ -7,14 +7,22 @@
   // ─── Toast system ───────────────────────────────────────────────────────
   const toastContainer = document.getElementById('toast-container');
 
-  window.showToast = function(message, type) {
+  window.showToast = function(message, type, detail) {
     type = type || 'success';
     if (!toastContainer) return;
     const toast = document.createElement('div');
     toast.className = 'toast toast-' + type;
-    toast.innerHTML = '<strong>' + (type === 'success' ? '✓' : '✗') + '</strong><span>' + message + '</span>';
+    const icon = type === 'success' ? '✓' : (type === 'error' ? '✗' : '!');
+    let html = '<strong>' + icon + '</strong><span>' + message + '</span>';
+    if (detail) {
+      const detailEl = document.createElement('div');
+      detailEl.className = 'toast-detail';
+      detailEl.textContent = detail;
+      html += detailEl.outerHTML;
+    }
+    toast.innerHTML = html;
     toastContainer.appendChild(toast);
-    setTimeout(function() { toast.remove(); }, 4000);
+    setTimeout(function() { toast.remove(); }, 6000);
   };
 
   // ─── New Directory Modal ────────────────────────────────────────────────
@@ -118,7 +126,7 @@
           toggleNewDirectoryModal(false);
           window.location.href = '/directories/' + data.directory_id;
         } else {
-          showToast(data.message || 'Creation failed', 'error');
+          showToast('Failed to create "' + payload.name + '"', 'error', data.message || 'Unknown error');
         }
       } catch(err) {
         showToast('Network error', 'error');
@@ -161,7 +169,7 @@
         // Reload the page to pick up new run data
         setTimeout(function() { window.location.reload(); }, 1000);
       } else {
-        showToast(scriptName + ': ' + (data.error || 'Failed'), 'error');
+        showToast(scriptName + ' failed', 'error', (data.error || 'Unknown error').substring(0, 500));
       }
     } catch(err) {
       showToast('Network error', 'error');

@@ -75,7 +75,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  z-index: 1000;
+  z-index: 3000; /* Above modal z-index (2000) so toasts are never hidden */
 }
 
 .toast {
@@ -100,6 +100,16 @@ body {
   background: #fee2e2;
   color: #991b1b;
   border: 1px solid #fca5a5;
+}
+
+.toast-detail {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.8;
+  font-family: monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 400px;
 }
 
 @keyframes slide-in {
