@@ -121,12 +121,25 @@
           body: JSON.stringify(payload),
         });
         const data = await resp.json();
-        if (data.success) {
+        if (resp.ok && data.success) {
           showToast('Created "' + payload.name + '"', 'success');
           toggleNewDirectoryModal(false);
           window.location.href = '/directories/' + data.directory_id;
         } else {
-          showToast('Failed to create "' + payload.name + '"', 'error', data.message || 'Unknown error');
+          var errDetail;
+          if (data.detail) {
+            // Pydantic validation error
+            if (Array.isArray(data.detail)) {
+              errDetail = data.detail.map(function(d) {
+                return d.loc.join('.') + ': ' + d.msg;
+              }).join('\n');
+            } else {
+              errDetail = data.detail;
+            }
+          } else {
+            errDetail = data.message || 'Unknown error';
+          }
+          showToast('Failed to create "' + payload.name + '"', 'error', errDetail);
         }
       } catch(err) {
         showToast('Network error', 'error');
