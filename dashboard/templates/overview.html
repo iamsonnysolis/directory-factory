@@ -1,59 +1,67 @@
 {% extends "base.html" %}
-{% block title %}Directory Factory — Overview{% endblock %}
+{% block title %}Directory Factory{% if view == 'pipeline' %} — Pipeline{% elif view == 'deploy' %} — Deploy{% endif %}{% endblock %}
 
 {% block content %}
 <div class="overview-header">
-  <h1>Directories</h1>
+  <div>
+    <h1>
+      {% if view == 'pipeline' %}Pipeline{% elif view == 'deploy' %}Deploy{% else %}Directories{{ '' }}{% endif %}
+    </h1>
+    <p class="overview-subhead">
+      {% if view == 'pipeline' %}Directories grouped by current pipeline stage{% elif view == 'deploy' %}Directories ready to deploy or live{% else %}All directories in one grid{% endif %}
+    </p>
+  </div>
   <button class="btn btn-primary" id="open-new-directory">＋ New Directory</button>
 </div>
 
+{% if directories | length == 0 %}
+<div class="card-empty">
+  <p>No directories found. Create one to get started.</p>
+  <button class="btn btn-primary" id="open-new-directory-2">＋ New Directory</button>
+</div>
+{% else %}
 <div class="project-grid">
-  {% for proj in projects %}
-  <div class="project-card">
+  {% for d in directories %}
+  <div class="project-card" data-directory-id="{{ d.id }}">
     <div class="project-card-header">
       <div>
-        <div class="project-card-name">{{ proj.name }}</div>
+        <div class="project-card-name">{{ d.name }}</div>
         <div class="project-meta">
-          <span>{{ proj.field_tier or '—' }}</span>
+          <span>{{ d.field_tier }}</span>
           <span>•</span>
-          <span class="count">{{ proj.place_count }} places</span>
+          <span class="count">{{ d.place_count }} places</span>
         </div>
       </div>
-      <span class="status-pill status-running">● Enriching</span>
+      <span class="status-pill status-{{ d.status_class }}">{{ d.current_stage }}</span>
     </div>
 
-    <div class="pipeline-stepper">
-      {% set stages = [
-        ('collection.collect', 'collected', 'done'),
-        ('cleaning.clean', 'cleaned', 'done'),
-        ('enrichment.enrich', 'enriched', 'running'),
-        ('upload.d1', 'uploaded', 'not_started'),
-        ('deploy.provision', 'deployed', 'not_started'),
-      ] %}
-      {% for script, label, state in stages %}
+    <div class="pipeline-stepper" id="stepper-{{ d.id }}">
+      {% for s in d.stages %}
         {% if not loop.first %}<div class="dot-divider"></div>{% endif %}
-        <div class="pipeline-dot dot-{{ state }}" title="{{ label }}"></div>
+        <div class="pipeline-dot dot-{{ s.state }}" title="{{ s.label }}"></div>
       {% endfor %}
     </div>
 
     <div class="project-card-footer">
-      <span class="updated">Updated {{ proj.created_at.split('T')[0] if proj.created_at else '—' }}</span>
-      <a href="/directories/{{ proj.id }}" class="btn">View</a>
+      <span class="updated">Updated {{ d.created_at.split('T')[0] if d.created_at else '—' }}</span>
+      <div class="card-actions">
+        <a href="/directories/{{ d.id }}" class="btn btn-sm">View</a>
+        {% if d.current_stage == 'Live' %}
+        <a href="#" class="btn btn-sm btn-ghost">View Live ↗</a>
+        {% endif %}
+      </div>
     </div>
-  </div>
-  {% else %}
-  <div class="card-empty">
-    <p>No directories found. Create one to get started.</p>
   </div>
   {% endfor %}
 </div>
+{% endif %}
 
 <!-- New Directory Modal -->
 <div class="modal-overlay" id="new-directory-modal">
   <div class="modal">
-    <button class="btn" id="close-modal" style="float:right;border:none;font-size:18px;">×</button>
+    <button class="btn btn-ghost" id="close-modal" style="float:right;border:none;font-size:18px;padding:4px 8px;">×</button>
     <h2>New Directory</h2>
-    <form id="create-directory-form" method="POST" action="/api/projects">
+    <form id="create-directory-form">
       <div class="form-group">
         <label for="dir-name">Name</label>
         <input type="text" id="dir-name" name="name" required placeholder="e.g. Mobile Dog Groomers">
@@ -68,13 +76,26 @@
       </div>
       <div class="form-group">
         <label for="dir-domain">Domain</label>
-        <input type="text" id="dir-domain" name="domain" placeholder="e.g. doggroomers.example.com">
+        <input type="text" id="dir-domain" name="domain" placeholder="e.g. doggroomers.pages.dev">
       </div>
       <div class="form-group">
         <label for="search-terms-input">Search terms (press Enter to add)</label>
         <div id="search-terms-tags"></div>
         <input type="text" id="search-terms-input" name="search_terms_input" placeholder="e.g. dog grooming brisbane">
         <input type="hidden" id="search_terms" name="search_terms" value="[]">
+      </div>
+      <div class="form-group">
+        <label>Target metros</label>
+        <div class="metro-tags">
+          <label><input type="checkbox" name="target_metros" value="Sydney" checked> Sydney</label>
+          <label><input type="checkbox" name="target_metros" value="Melbourne" checked> Melbourne</label>
+          <label><input type="checkbox" name="target_metros" value="Brisbane" checked> Brisbane</label>
+          <label><input type="checkbox" name="target_metros" value="Perth" checked> Perth</label>
+          <label><input type="checkbox" name="target_metros" value="Adelaide" checked> Adelaide</label>
+          <label><input type="checkbox" name="target_metros" value="Canberra" checked> Canberra</label>
+          <label><input type="checkbox" name="target_metros" value="Hobart" checked> Hobart</label>
+          <label><input type="checkbox" name="target_metros" value="Darwin" checked> Darwin</label>
+        </div>
       </div>
       <div class="form-group">
         <label for="dir-tier">Field tier</label>
@@ -94,7 +115,6 @@
 {% endblock %}
 {% block extra_js %}
 <script>
-  // Pre-fill slug from existing project data if editing
   document.getElementById('dir-name').addEventListener('input', function() {
     const slug = this.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     document.getElementById('dir-slug').value = slug;

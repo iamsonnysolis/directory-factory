@@ -19,17 +19,17 @@
     <div class="settings-row">
       <label>Cloudflare API Token</label>
       <input type="text" name="CLOUDFLARE_API_TOKEN" value="{{ env.get('CLOUDFLARE_API_TOKEN', '') }}" readonly style="background:#f9f9f9;">
-      <button type="button" class="btn btn-test" data-action="test-credential" data-key="CLOUDFLARE_API_TOKEN">Test</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="test-credential" data-key="CLOUDFLARE_API_TOKEN">Test</button>
     </div>
     <div class="settings-row">
       <label>Cloudflare Account ID</label>
       <input type="text" name="CLOUDFLARE_ACCOUNT_ID" value="{{ env.get('CLOUDFLARE_ACCOUNT_ID', '') }}" readonly style="background:#f9f9f9;">
-      <button type="button" class="btn btn-test" data-action="test-credential" data-key="CLOUDFLARE_ACCOUNT_ID">Test</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="test-credential" data-key="CLOUDFLARE_ACCOUNT_ID">Test</button>
     </div>
     <div class="settings-row">
       <label>GitHub Token</label>
       <input type="text" name="GITHUB_TOKEN" value="{{ env.get('GITHUB_TOKEN', '') }}" readonly style="background:#f9f9f9;">
-      <button type="button" class="btn btn-test" data-action="test-credential" data-key="GITHUB_TOKEN">Test</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="test-credential" data-key="GITHUB_TOKEN">Test</button>
     </div>
   </div>
 
@@ -54,23 +54,4 @@
   <button type="button" class="btn btn-primary" id="save-settings">Save Settings</button>
   <span id="save-status" style="font-size:13px;color:#666;margin-left:12px;"></span>
 </div>
-
-<script>
-document.getElementById('save-settings').addEventListener('click', async function() {
-  const formData = new FormData(document.getElementById('settings-form'));
-  const settings = {};
-  for (const [key, value] of formData.entries()) {
-    settings[key] = value;
-  }
-  const resp = await fetch('/api/settings/save', {
-    method: 'POST',
-    body: new URLSearchParams({ settings: JSON.stringify(settings) }),
-  });
-  const data = await resp.json();
-  if (data.success) {
-    document.getElementById('save-status').textContent = 'Saved!';
-    setTimeout(() => { document.getElementById('save-status').textContent = ''; }, 3000);
-  }
-});
-</script>
 {% endblock %}

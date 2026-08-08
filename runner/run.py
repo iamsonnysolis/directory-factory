@@ -122,15 +122,20 @@ def run_script(script_name: str, project_id: int, params: dict | None = None) ->
 
     # Log to runs.db (with stdout/stderr per Q8 schema)
     init_runs_db()
+    # Ensure counts_json column exists
     conn = sqlite3.connect(RUNS_DB_PATH)
+    cols = [c[1] for c in conn.execute("PRAGMA table_info(runs)").fetchall()]
+    if "counts_json" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN counts_json TEXT")
+        conn.commit()
     conn.execute(
         "INSERT INTO runs "
-        "(script_name, project_id, started_at, finished_at, status, summary, error, stdout, stderr) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(script_name, project_id, started_at, finished_at, status, summary, error, stdout, stderr, counts_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             script_name, project_id, started_at, finished_at,
             output["status"], output.get("summary"), output.get("error"),
-            stdout, stderr,
+            stdout, stderr, json.dumps(output.get("counts", {})),
         ),
     )
     conn.commit()

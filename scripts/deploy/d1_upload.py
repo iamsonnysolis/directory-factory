@@ -519,17 +519,18 @@ def upload_project(project_id: int, params: dict) -> dict:
         Dict with ``summary`` and ``counts``.
     """
     # ── Validate required params ─────────────────────────────────────────────
+    dry_run = params.get("dry_run", False)
     account_id = params.get("d1_account_id")
     database_id = params.get("d1_database_id")
-    site_name = params.get("site_name")
-    dry_run = params.get("dry_run", False)
+    site_name = params.get("site_name", "Directory Factory")
 
-    if not account_id:
-        raise ValueError("params.d1_account_id is required (Cloudflare account ID)")
-    if not database_id:
-        raise ValueError("params.d1_database_id is required (D1 database ID)")
-    if not site_name:
-        raise ValueError("params.site_name is required (directory branding name)")
+    if not dry_run:
+        if not account_id:
+            raise ValueError("params.d1_account_id is required (Cloudflare account ID)")
+        if not database_id:
+            raise ValueError("params.d1_database_id is required (D1 database ID)")
+        if not site_name:
+            raise ValueError("params.site_name is required (directory branding name)")
 
     api_token = params.get("d1_api_token") or os.getenv("CLOUDFLARE_API_TOKEN")
     if not dry_run and not api_token:

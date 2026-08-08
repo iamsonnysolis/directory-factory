@@ -12,9 +12,13 @@
     <header class="top-bar">
       <div class="top-bar-left">
         <a href="/" class="logo">Directory Factory</a>
+        <nav class="top-bar-nav">
+          <a href="/?view=overview" class="{% if not view or view == 'overview' %}active{% endif %}">Overview</a>
+          <a href="/?view=pipeline" class="{% if view == 'pipeline' %}active{% endif %}">Pipeline</a>
+          <a href="/?view=deploy" class="{% if view == 'deploy' %}active{% endif %}">Deploy</a>
+        </nav>
       </div>
       <nav class="top-bar-nav">
-        <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Overview</a>
         <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">Settings</a>
       </nav>
     </header>

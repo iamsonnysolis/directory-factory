@@ -7,29 +7,40 @@
   // ─── Toast system ───────────────────────────────────────────────────────
   const toastContainer = document.getElementById('toast-container');
 
-  window.showToast = function(message, type = 'success') {
+  window.showToast = function(message, type) {
+    type = type || 'success';
     if (!toastContainer) return;
     const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
-    toast.innerHTML = `<strong>${type === 'success' ? '✓' : '✗'}</strong><span>${message}</span>`;
+    toast.className = 'toast toast-' + type;
+    toast.innerHTML = '<strong>' + (type === 'success' ? '✓' : '✗') + '</strong><span>' + message + '</span>';
     toastContainer.appendChild(toast);
-    setTimeout(() => toast.remove(), 4000);
+    setTimeout(function() { toast.remove(); }, 4000);
   };
 
   // ─── New Directory Modal ────────────────────────────────────────────────
   const modal = document.getElementById('new-directory-modal');
-  const openBtn = document.getElementById('open-new-directory');
-  const closeBtn = document.getElementById('close-modal');
-  const cancelBtn = document.getElementById('cancel-modal');
+  const openBtns = document.querySelectorAll('#open-new-directory, #open-new-directory-2');
+  const closeModalBtn = document.getElementById('close-modal');
+  const cancelModalBtn = document.getElementById('cancel-modal');
 
-  function toggleModal(show) {
+  function toggleNewDirectoryModal(show) {
     if (!modal) return;
     modal.classList.toggle('active', show);
   }
 
-  if (openBtn) openBtn.addEventListener('click', () => toggleModal(true));
-  if (closeBtn) closeBtn.addEventListener('click', () => toggleModal(false));
-  if (cancelBtn) cancelBtn.addEventListener('click', () => toggleModal(false));
+  openBtns.forEach(function(btn) { if (btn) btn.addEventListener('click', function() { toggleNewDirectoryModal(true); }); });
+  if (closeModalBtn) closeModalBtn.addEventListener('click', function() { toggleNewDirectoryModal(false); });
+  if (cancelModalBtn) cancelModalBtn.addEventListener('click', function() { toggleNewDirectoryModal(false); });
+
+  // Close modal on Escape / click outside
+  if (modal) {
+    modal.addEventListener('click', function(e) {
+      if (e.target === modal) toggleNewDirectoryModal(false);
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') toggleNewDirectoryModal(false);
+    });
+  }
 
   // Auto-generate slug from name
   const nameInput = document.getElementById('dir-name');
@@ -56,20 +67,19 @@
         const span = document.createElement('span');
         span.className = 'tag';
         span.textContent = tag;
-        span.ontouchend = () => span.remove();
-        span.onclick = () => span.remove();
+        span.onclick = function() { span.remove(); updateHiddenInput(); };
         tagContainer.appendChild(span);
         this.value = '';
-        updateHidden('search_terms');
+        updateHiddenInput();
       }
     });
   }
 
-  function updateHidden(hiddenId) {
-    const hidden = document.getElementById(hiddenId);
+  function updateHiddenInput() {
+    const hidden = document.getElementById('search_terms');
     if (!hidden) return;
     const tags = Array.from(tagContainer ? tagContainer.querySelectorAll('.tag') : [])
-      .map(el => el.textContent);
+      .map(function(el) { return el.textContent; });
     hidden.value = JSON.stringify(tags);
   }
 
@@ -78,61 +88,83 @@
   if (createForm) {
     createForm.addEventListener('submit', async function(e) {
       e.preventDefault();
-      updateHidden('search_terms');
+      updateHiddenInput();
+
+      // Collect metro checkboxes
+      const metroChecks = document.querySelectorAll('input[name="target_metros"]:checked');
+      const metros = Array.from(metroChecks).map(function(c) { return c.value; });
+
       const formData = new FormData(this);
-      const params = new URLSearchParams();
-      for (const [key, value] of formData.entries()) {
-        params.append(key, value);
-      }
+      const payload = {
+        name: formData.get('name'),
+        slug: formData.get('slug'),
+        niche_label: formData.get('niche_label'),
+        field_tier: formData.get('field_tier'),
+        search_step_km: parseInt(formData.get('search_step_km') || '10'),
+        search_terms: formData.get('search_terms'),
+        target_metros: JSON.stringify(metros),
+        domain: formData.get('domain'),
+      };
+
       try {
-        const resp = await fetch('/api/projects', { method: 'POST', body: params });
+        const resp = await fetch('/api/directories', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
         const data = await resp.json();
         if (data.success) {
-          window.showToast(`Created "${formData.get('name')}"`, 'success');
-          toggleModal(false);
-          window.location.href = `/directories/${data.project_id}`;
+          showToast('Created "' + payload.name + '"', 'success');
+          toggleNewDirectoryModal(false);
+          window.location.href = '/directories/' + data.directory_id;
         } else {
-          window.showToast(data.message || 'Creation failed', 'error');
+          showToast(data.message || 'Creation failed', 'error');
         }
       } catch(err) {
-        window.showToast('Network error', 'error');
+        showToast('Network error', 'error');
       }
     });
   }
 
   // ─── Tab switching ──────────────────────────────────────────────────────
   const tabButtons = document.querySelectorAll('.tab');
-  tabButtons.forEach(btn => {
+  tabButtons.forEach(function(btn) {
     btn.addEventListener('click', function() {
-      const tabName = this.dataset.tab;
-      // Update active tab button
-      tabButtons.forEach(b => b.classList.toggle('active', b === this));
-      // Show active panel
-      document.querySelectorAll('.tab-panel').forEach(panel => {
-        panel.classList.toggle('active', panel.id === `tab-${tabName}`);
+      const thisBtn = btn;
+      const tabName = thisBtn.dataset.tab;
+      tabButtons.forEach(function(b) { b.classList.toggle('active', b === thisBtn); });
+      document.querySelectorAll('.tab-panel').forEach(function(panel) {
+        panel.classList.toggle('active', panel.id === 'tab-' + tabName);
       });
     });
   });
 
-  // ─── Run script trigger ─────────────────────────────────────────────────
-  window.runScript = async function(scriptName, projectId, params = {}) {
+  // ─── Run pipeline stage ─────────────────────────────────────────────────
+  // Called from the Directory Detail tabs — triggers a script via the runner
+  window.runPipelineStage = async function(scriptName, directoryId, params) {
     const btn = event ? event.target : null;
     if (btn) {
       btn.disabled = true;
       btn.textContent = 'Running…';
     }
+
     try {
-      const resp = await fetch(`/api/run?script_name=${encodeURIComponent(scriptName)}&project_id=${projectId}&params=${encodeURIComponent(JSON.stringify(params))}`, {method: 'POST'});
+      const resp = await fetch('/api/directories/' + directoryId + '/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script_name: scriptName, params: params || {} }),
+      });
       const data = await resp.json();
+
       if (data.status === 'success') {
-        window.showToast(`${scriptName}: ${data.summary || 'Done'}`, 'success');
+        showToast(data.summary || (scriptName + ' completed'), 'success');
+        // Reload the page to pick up new run data
+        setTimeout(function() { window.location.reload(); }, 1000);
       } else {
-        window.showToast(`${scriptName}: ${data.error || 'Failed'}`, 'error');
+        showToast(scriptName + ': ' + (data.error || 'Failed'), 'error');
       }
-      return data;
-    } catch (err) {
-      window.showToast('Network error', 'error');
-      return null;
+    } catch(err) {
+      showToast('Network error', 'error');
     } finally {
       if (btn) {
         btn.disabled = false;
@@ -142,23 +174,38 @@
   };
 
   // ─── Polling for running stages ─────────────────────────────────────────
-  function startPolling(projectId) {
-    const interval = setInterval(async () => {
+  let pollInterval = null;
+
+  function stopPolling() {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  }
+
+  function startPolling(directoryId) {
+    stopPolling();
+    pollInterval = setInterval(async function() {
       try {
-        const resp = await fetch(`/api/projects/${projectId}/status`);
+        const resp = await fetch('/api/directories/' + directoryId);
         const data = await resp.json();
-        // Update pills/status — caller can hook into this
         document.dispatchEvent(new CustomEvent('pipeline-update', { detail: data }));
-      } catch (e) {
+      } catch(e) {
         // Silently fail — polling will retry
       }
     }, 3000);
-    return interval;
   }
 
   window.startPolling = startPolling;
+  window.stopPolling = stopPolling;
 
-  // ─── Expandable log viewer ─────────────────────────────────────────────
+  // Start polling on Directory Detail page
+  const dirDetailDirId = typeof DIRECTORY_ID !== 'undefined' ? DIRECTORY_ID : null;
+  if (dirDetailDirId) {
+    startPolling(dirDetailDirId);
+  }
+
+  // ─── Expandable log viewer ──────────────────────────────────────────────
   document.addEventListener('click', function(e) {
     const btn = e.target.closest('[data-action="toggle-log"]');
     if (btn) {
@@ -171,30 +218,176 @@
     }
   });
 
-  // ─── Settings test buttons ──────────────────────────────────────────────
+  // ─── View run log ───────────────────────────────────────────────────────
+  window.viewRunLog = async function(runId) {
+    try {
+      const resp = await fetch('/api/runs/' + runId);
+      const data = await resp.json();
+      const logContent = data.stdout || '';
+      alert('Run #' + runId + '\n\n' + logContent.substring(0, 2000) + '...');
+    } catch(e) {
+      showToast('Failed to load run log', 'error');
+    }
+  };
+
+  // ─── Delete confirmation ─────────────────────────────────────────────────
+  const deleteModal = document.getElementById('delete-confirm-modal');
+  const deleteBtn = document.getElementById('delete-directory');
+  const cancelDeleteBtn = document.getElementById('cancel-delete');
+  const confirmDeleteBtn = document.getElementById('confirm-delete');
+
+  if (deleteBtn && deleteModal) {
+    deleteBtn.addEventListener('click', function() {
+      deleteModal.classList.add('active');
+    });
+  }
+  if (cancelDeleteBtn && deleteModal) {
+    cancelDeleteBtn.addEventListener('click', function() {
+      deleteModal.classList.remove('active');
+    });
+  }
+  if (confirmDeleteBtn && deleteModal) {
+    confirmDeleteBtn.addEventListener('click', async function() {
+      const dirId = deleteBtn ? deleteBtn.dataset.id : null;
+      if (!dirId) return;
+      try {
+        const resp = await fetch('/api/directories/' + dirId, { method: 'DELETE' });
+        const data = await resp.json();
+        if (data.success) {
+          showToast('Directory deleted', 'success');
+          window.location.href = '/';
+        }
+      } catch(e) {
+        showToast('Delete failed: ' + e.message, 'error');
+      }
+      deleteModal.classList.remove('active');
+    });
+  }
+
+  // ─── Settings test credentials ──────────────────────────────────────────
   document.addEventListener('click', function(e) {
     const btn = e.target.closest('[data-action="test-credential"]');
     if (btn) {
       const key = btn.dataset.key;
       btn.disabled = true;
       btn.textContent = 'Testing…';
-      fetch('/api/settings/test', {
-        method: 'POST',
-        body: new URLSearchParams({ key: key }),
-      }).then(r => r.json()).then(data => {
-        btn.disabled = false;
-        btn.textContent = 'Test';
-        if (data.valid) {
-          window.showToast(`${key}: ✓ Valid`, 'success');
-        } else {
-          window.showToast(`${key}: ✗ ${data.message}`, 'error');
-        }
-      }).catch(() => {
-        btn.disabled = false;
-        btn.textContent = 'Test';
-        window.showToast(`${key}: Network error`, 'error');
-      });
+      fetch('/api/settings/test/' + key, { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          btn.disabled = false;
+          btn.textContent = 'Test';
+          if (data.valid) {
+            showToast(key + ': ✓ Valid', 'success');
+          } else {
+            showToast(key + ': ✗ ' + data.message, 'error');
+          }
+        })
+        .catch(function() {
+          btn.disabled = false;
+          btn.textContent = 'Test';
+          showToast(key + ': Network error', 'error');
+        });
     }
   });
+
+  // ─── Settings save ──────────────────────────────────────────────────────
+  const saveSettingsBtn = document.getElementById('save-settings');
+  if (saveSettingsBtn) {
+    saveSettingsBtn.addEventListener('click', async function() {
+      const formData = new FormData(document.getElementById('settings-form'));
+      const settings = {};
+      for (const [key, value] of formData.entries()) {
+        settings[key] = value;
+      }
+      try {
+        const resp = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settings),
+        });
+        const data = await resp.json();
+        const statusEl = document.getElementById('save-status');
+        if (statusEl) statusEl.textContent = data.success ? 'Saved' : ('Error: ' + (data.message || 'Unknown'));
+      } catch(e) {
+        showToast('Save failed', 'error');
+      }
+    });
+  }
+
+  // ─── Config form save ───────────────────────────────────────────────────
+  const configForm = document.getElementById('config-form');
+  if (configForm) {
+    configForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const formData = new FormData(this);
+      const config = {};
+      for (const [key, value] of formData.entries()) {
+        config[key] = value;
+      }
+      try {
+        const resp = await fetch('/api/directories/' + DIRECTORY_ID + '/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        const data = await resp.json();
+        if (data.success) {
+          showToast('Config saved', 'success');
+        } else {
+          showToast('Save failed', 'error');
+        }
+      } catch(e) {
+        showToast('Network error', 'error');
+      }
+    });
+
+    // Live preview for config form
+    const colorInputs = configForm.querySelectorAll('input[type="text"]');
+    colorInputs.forEach(function(input) {
+      input.addEventListener('input', function() {
+        const name = input.name;
+        const value = input.value;
+        const previewName = document.getElementById('preview-' + name);
+        if (previewName) previewName.textContent = value || '—';
+
+        if (name === 'theme_primary_color') {
+          document.documentElement.style.setProperty('--color-primary', value);
+        }
+        if (name === 'theme_secondary_color') {
+          document.documentElement.style.setProperty('--color-secondary', value);
+        }
+      });
+    });
+  }
+
+  // ─── Load places on Collect tab ─────────────────────────────────────────
+  function loadPlaces() {
+    const searchInput = document.getElementById('places-search');
+    const completenessInput = document.getElementById('min-completeness');
+    const completenessVal = document.getElementById('completeness-val');
+    const tbody = document.getElementById('places-table-body');
+
+    if (!tbody) return;
+
+    async function fetchPlaces() {
+      const search = searchInput ? searchInput.value : '';
+      const minComp = completenessInput ? completenessInput.value : 0;
+      const resp = await fetch('/api/directories/' + DIRECTORY_ID + '/places?search=' + encodeURIComponent(search) + '&min_completeness=' + minComp + '&limit=100');
+      const data = await resp.json();
+      tbody.innerHTML = data.places.map(function(p) {
+        return '<tr><td>' + p.display_name + '</td><td>' + (p.formatted_address || '') + '</td><td>' + (p.data_completeness_score || 0) + '%</td><td>' + (p.search_term || '') + '</td></tr>';
+      }).join('');
+    }
+
+    if (searchInput) searchInput.addEventListener('input', function() { setTimeout(fetchPlaces, 300); });
+    if (completenessInput) completenessInput.addEventListener('input', function() {
+      if (completenessVal) completenessVal.textContent = completenessInput.value + '+';
+      setTimeout(fetchPlaces, 300);
+    });
+
+    fetchPlaces();
+  }
+
+  loadPlaces();
 
 })();

@@ -192,6 +192,31 @@ for in-page interactivity, matching the rest of the tech stack decision.
 
 ```
 /                          Overview — grid of directories
+## Information Architecture — reconciled with the actual build
+
+Hermes built a sidebar (Overview, Directories, Pipeline, Deploy, Live
+Stats, Config, Settings) rather than the two-link top bar originally
+recommended here. That's fine — not worth a rebuild over — but two things
+need scoping down so it stays "simple, useful" rather than turning into
+seven separately-built feature areas:
+
+- **Drop the separate "Directories" nav item.** It would show the same
+  grid as Overview (a list of directories) — Overview already has the
+  grid/list view toggle for exactly this. Keeping both means either two
+  pages showing the same thing, or building a second thing that isn't
+  needed. Overview *is* the directories list.
+- **"Pipeline" and "Deploy" are filtered views of the Overview grid, not
+  new pages.** "Pipeline" = the same directory cards, sorted/grouped by
+  current stage instead of last-updated. "Deploy" = the same cards,
+  filtered to directories at Upload-complete-or-later. Don't build
+  separate data-fetching or card components for these — reuse the
+  Overview grid with a different default filter applied.
+
+Routes:
+```
+/                          Overview — grid of directories (also serves as "Directories")
+/?view=pipeline            Same grid, grouped by stage (the "Pipeline" nav item)
+/?view=deploy              Same grid, filtered to Upload-done-or-later (the "Deploy" nav item)
 /directories/{id}          Directory Detail — tabbed: Collect | Clean | Enrich | Upload | Deploy | Live Stats | Config | Runs
 /settings                  Global settings — credentials
 ```
@@ -202,21 +227,10 @@ pattern (Q11).
 
 ## Global Shell
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│  Directory Factory          [Overview] [Settings]               │  ← top bar, all pages
-├────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│                        PAGE CONTENT                              │
-│                                                                   │
-└────────────────────────────────────────────────────────────────┘
-```
-
-No sidebar — with only two top-level routes (Overview, Settings) and
-everything else nested under a directory, a sidebar is unnecessary chrome.
-Top bar: logo/name (left), two nav links (right). That's the entire global
-nav. Desktop-only per Q1 — fixed content max-width (~1200px), no responsive
-breakpoints.
+Sidebar as built (logo, Overview, Pipeline, Deploy, Live Stats, Config,
+Settings — with "Directories" dropped per above), plus a top bar with a
+directory switcher, notifications, and account menu. Desktop-only per Q1 —
+no responsive breakpoints needed.
 
 ## Status Pill Legend (used everywhere)
 

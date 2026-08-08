@@ -1,6 +1,6 @@
 """FastAPI dashboard for the Directory Factory.
 
-Phase 8 — a thin, generic UI over the standardized runner.
+Phase 8.1 — thin, generic UI over the standardized Phase 3 runner.
 Server-rendered pages (FastAPI + Jinja2) with vanilla JS for
 in-page interactivity (polling, form previews, log expansion).
 
@@ -9,6 +9,7 @@ Binds to 127.0.0.1 only — no authentication (see Dashboard-UX-Decisions.md Q2)
 
 import json
 import os
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -26,13 +27,13 @@ _DASHBOARD_DIR = _PROJECT_ROOT / "dashboard"
 _COLLECTION_DB = _PROJECT_ROOT / "data" / "collector.db"
 _RUNS_DB = _PROJECT_ROOT / "runs.db"
 _ENV_PATH = _PROJECT_ROOT / ".env"
+_SITE_CONFIG_DB = _PROJECT_ROOT / "runs.db"  # site_config stored in runs.db for v1
 
-for p in [_PROJECT_ROOT, _PROJECT_ROOT / "scripts"]:
+for p in [_PROJECT_ROOT, _PROJECT_ROOT / "scripts", _PROJECT_ROOT / "runner"]:
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-from runner.run import run_script, SCRIPT_MAP  # noqa: E402
-from runner.contract import script_main  # noqa: E402
+from runner.run import run_script, SCRIPT_MAP, init_runs_db  # noqa: E402
 
 # ── Jinja2 setup ───────────────────────────────────────────────────────────
 _templates = Environment(
@@ -45,9 +46,31 @@ app = FastAPI(title="Directory Factory Dashboard", docs_url=None, redoc_url=None
 app.mount("/static", StaticFiles(directory=str(_DASHBOARD_DIR / "static")), name="static")
 
 
-# ── Database helpers ───────────────────────────────────────────────────────
+# ── Pydantic models for JSON body parsing ────────────────────────────────────
+from pydantic import BaseModel as _BaseModel, Field as _Field, ConfigDict
+
+
+class DirectoryCreate(_BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    slug: Optional[str] = None
+    niche_label: str = "local_service_business"
+    field_tier: str = "Enterprise"
+    search_step_km: int = 10
+    search_terms: list = []
+    target_metros: list = []
+    domain: Optional[str] = None
+
+
+class RunScriptRequest(_BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    script_name: str
+    params: dict = {}
+
+
+# ─── Database helpers ───────────────────────────────────────────────────────
 def _connect_collector():
-    """Connect to the collection DB (SQLite via SQLAlchemy)."""
+    """Connect to the collection DB (collector.db)."""
     return sqlite3.connect(str(_COLLECTION_DB))
 
 
@@ -56,7 +79,49 @@ def _connect_runs():
     return sqlite3.connect(str(_RUNS_DB))
 
 
-# ── .env helpers ───────────────────────────────────────────────────────────
+def _ensure_site_config_table():
+    """Create site_config table in runs.db if it doesn't exist."""
+    init_runs_db()
+    conn = _connect_runs()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_config (
+            project_id INTEGER PRIMARY KEY,
+            config_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def _get_site_config(project_id: int) -> dict:
+    """Read site_config for a project from runs.db. Returns empty dict if not set."""
+    _ensure_site_config_table()
+    conn = _connect_runs()
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT config_json FROM site_config WHERE project_id = ?", (project_id,)
+    ).fetchone()
+    conn.close()
+    if row:
+        return json.loads(row["config_json"])
+    return {}
+
+
+def _save_site_config(project_id: int, config: dict) -> None:
+    """Save site_config for a project to runs.db."""
+    from datetime import datetime
+    _ensure_site_config_table()
+    conn = _connect_runs()
+    conn.execute(
+        "INSERT OR REPLACE INTO site_config (project_id, config_json, updated_at) VALUES (?, ?, ?)",
+        (project_id, json.dumps(config), datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ─── .env helpers ───────────────────────────────────────────────────────────
 def _read_env():
     """Read .env file into a dict."""
     env = {}
@@ -81,103 +146,242 @@ def _write_env(env: dict):
     _ENV_PATH.write_text("\n".join(lines) + "\n")
 
 
-# ── Pipeline stage helpers ──────────────────────────────────────────────────
+# ─── Pipeline stage helpers ──────────────────────────────────────────────────
+# 6 stages per the spec's pipeline stepper (Collect·Clean·Enrich·Upload·Deploy·Live)
+# Stage label → (script_name, display_name, state_key)
 PIPELINE_STAGES = [
-    ("collection.collect", "Collect", "🟦"),
-    ("cleaning.clean", "Clean", "🟩"),
-    ("enrichment.enrich", "Enrich", "🟨"),
-    ("upload.d1", "Upload", "🟥"),
+    ("collection.collect", "Collecting", "collecting"),
+    ("cleaning.clean", "Cleaning", "cleaning"),
+    ("enrichment.enrich", "Enriching", "enriching"),
+    ("upload.d1", "Uploading", "uploading"),
+    ("deploy.provision", "Deploying", "deploying"),
+    ("live", "Live", "live"),
 ]
 
+# Stage label → script_name for trigger buttons
+STAGE_SCRIPTS = {
+    "Collecting": "collection.collect",
+    "Cleaning": "cleaning.clean",
+    "Enriching": "enrichment.enrich",
+    "Uploading": "upload.d1",
+    "Deploying": "deploy.provision",
+}
 
-def _get_project_status(project_id: int) -> dict:
-    """Compute directory-level status from runs.db (last run per stage)."""
+
+def _get_directory_status(project_id: int) -> dict:
+    """Compute directory-level status from runs.db (last run per stage).
+
+    Returns a dict mapping stage_key -> {status, started_at, summary, counts}
+    """
     conn = _connect_runs()
     conn.row_factory = sqlite3.Row
-    cursor = conn.execute(
-        "SELECT script_name, status, started_at FROM runs "
-        "WHERE project_id = ? ORDER BY started_at DESC",
+    rows = conn.execute(
+        "SELECT script_name, status, started_at, finished_at, summary, counts_json, stdout, stderr "
+        "FROM runs WHERE project_id = ? ORDER BY started_at DESC",
         (project_id,),
-    )
-    rows = cursor.fetchall()
+    ).fetchall()
     conn.close()
 
     last_by_stage = {}
     for row in rows:
         name = row["script_name"]
         if name not in last_by_stage:
-            last_by_stage[name] = row
+            last_by_stage[name] = dict(row)
 
     return last_by_stage
 
 
-# ── API Endpoints ──────────────────────────────────────────────────────────
+def _compute_pipeline_state(project_id: int) -> list[dict]:
+    """Compute the 6-dot pipeline stepper state for a directory.
+
+    Returns list of {label, state} where state is 'done', 'running', or 'not_started'.
+    """
+    stage_status = _get_directory_status(project_id)
+
+    # Determine which stages are done vs running
+    stage_order = ["collection.collect", "cleaning.clean", "enrichment.enrich",
+                    "upload.d1", "deploy.provision"]
+    done_stages = set()
+    current_stage = None
+
+    for script in stage_order:
+        run = stage_status.get(script)
+        if run and run["status"] == "success":
+            done_stages.add(script)
+        elif run and run["status"] == "running":
+            current_stage = script
+            break
+        elif run and run["status"] == "error":
+            # Stage errored — mark as error and stop
+            current_stage = script
+            break
+        elif run is None and current_stage is None:
+            # Not started yet, and no running stage
+            pass
+
+    result = []
+    for script_name, label, icon_key in PIPELINE_STAGES:
+        if script_name in done_stages:
+            state = "done"
+        elif current_stage == script_name:
+            # Check if it's actually running or errored
+            run = stage_status.get(script_name)
+            if run:
+                state = run["status"]
+            else:
+                state = "not_started"
+        elif current_stage is None and script_name not in done_stages:
+            state = "not_started"
+        else:
+            # If a previous stage is current_stage (running/error), later stages are not_started
+            state = "not_started"
+
+        result.append({"label": label, "state": state, "icon_key": icon_key,
+                       "script_name": script_name})
+
+    # Check if deploy is done → Live stage
+    if "deploy.provision" in done_stages:
+        result[-1] = {"label": "Live", "state": "done", "icon_key": "live",
+                      "script_name": "live"}
+
+    return result
+
+
+def _current_stage_label(project_id: int) -> tuple[str, str]:
+    """Return (stage_label, status_class) for a directory.
+
+    stage_label matches the spec: Idea / Collecting / Cleaning / Enriching /
+    Uploading / Deploying / Live / Error
+    status_class matches CSS: not-started / running / done / error
+    """
+    stages = _compute_pipeline_state(project_id)
+
+    for s in stages:
+        if s["state"] == "running":
+            return s["label"], "running"
+        elif s["state"] == "error":
+            return "Error", "error"
+        elif s["state"] == "not_started":
+            # If it's the first not-started stage, show "Idea" for status text
+            return s["label"], "not-started"
+
+    return "Live", "done"
+
+
+def _directory_counts(project_id: int) -> dict:
+    """Get place/feature counts from cleaned/enriched data files."""
+    counts = {"places_collected": 0, "places_cleaned": 0, "features_enriched": 0}
+    base = _PROJECT_ROOT / "data" / str(project_id)
+
+    # Count collected places from collector.db
+    conn = _connect_collector()
+    try:
+        counts["places_collected"] = conn.execute(
+            "SELECT COUNT(*) FROM places WHERE project_id = ?", (project_id,)
+        ).fetchone()[0]
+    except Exception:
+        pass
+    conn.close()
+
+    # Count cleaned/enriched from flat files
+    cleaned_file = base / "cleaned" / "businesses.jsonl"
+    if cleaned_file.exists():
+        counts["places_cleaned"] = sum(1 for _ in open(cleaned_file))
+
+    enriched_file = base / "enriched" / "business_features.jsonl"
+    if enriched_file.exists():
+        counts["features_enriched"] = sum(1 for _ in open(enriched_file))
+
+    return counts
+
+
+# ─── Page routes ────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def overview(request: Request):
-    """Directory cards grid — the Overview page."""
-    env_dict = _read_env()
+async def overview(request: Request, view: str = "overview"):
+    """Overview page — grid of directories.
 
-    # Read projects from collector.db
+    view='overview' → all directories (default)
+    view='pipeline' → same grid, sorted by current stage
+    view='deploy' → same grid, filtered to Deploy-done-or-later
+    """
     conn = _connect_collector()
     conn.row_factory = sqlite3.Row
     try:
         projects = conn.execute(
-            "SELECT id, name, slug, country, status, field_tier, created_at, updated_at "
+            "SELECT id, name, slug, country, status, field_tier, search_step_km, created_at, updated_at "
             "FROM projects ORDER BY created_at DESC"
         ).fetchall()
     except sqlite3.OperationalError:
         projects = []
     conn.close()
 
-    # Build project status info
-    project_cards = []
+    # Build directory cards
+    cards = []
     for proj in projects:
         pid = proj["id"]
-        stage_status = _get_project_status(pid)
+        stages = _compute_pipeline_state(pid)
+        counts = _directory_counts(pid)
+        current_stage_label, status_class = _current_stage_label(pid)
 
-        # Determine current stage and counts
-        counts = {}
-        conn2 = _connect_collector()
-        try:
-            counts["places"] = conn2.execute(
-                "SELECT COUNT(*) FROM places WHERE project_id = ?", (pid,)
-            ).fetchone()[0]
-        except Exception:
-            counts["places"] = 0
-        conn2.close()
+        # Determine headline metric and status
+        if current_stage_label in ("Collecting", "Clean"):
+            metric = f"{counts['places_collected']} places"
+        elif current_stage_label in ("Cleaning",):
+            metric = f"{counts['places_cleaned']} places"
+        elif current_stage_label in ("Enriching",):
+            metric = f"{counts['features_enriched']} features"
+        elif current_stage_label in ("Uploading",):
+            metric = "Uploading"
+        elif current_stage_label in ("Deploying",):
+            metric = "Ready to deploy"
+        elif current_stage_label in ("Live",):
+            metric = "Live"
+        else:
+            metric = f"{counts['places_collected']} places"
 
-        project_cards.append({
+        card = {
             "id": pid,
             "name": proj["name"],
             "slug": proj["slug"],
-            "country": proj["country"],
             "status": proj["status"] or "idle",
             "field_tier": proj["field_tier"] or "Essentials",
-            "created_at": proj["created_at"],
-            "place_count": counts["places"],
-            "stages": stage_status,
-        })
+            "place_count": counts["places_collected"],
+            "current_stage": current_stage_label,
+            "status_class": status_class,
+            "metric": metric,
+            "stages": stages,
+            "created_at": proj["created_at"] or "",
+        }
+        cards.append(card)
+
+    # Apply view filter
+    if view == "pipeline":
+        # Sort by current stage
+        stage_order_map = {s[1]: i for i, s in enumerate(PIPELINE_STAGES)}
+        cards.sort(key=lambda c: stage_order_map.get(c["current_stage"], 99))
+    elif view == "deploy":
+        # Filter to Deploy-done-or-later
+        cards = [c for c in cards if c["current_stage"] in ("Deploy", "Live")]
 
     tmpl = _templates.get_template("overview.html")
     html = tmpl.render(
         request=request,
-        projects=project_cards,
-        env=env_dict,
+        directories=cards,
+        view=view,
     )
     return HTMLResponse(content=html)
 
 
-@app.get("/directories/{project_id}", response_class=HTMLResponse)
-async def directory_detail(request: Request, project_id: int):
-    """Directory Detail page with tabbed interface."""
-    # Verify project exists
+@app.get("/directories/{directory_id}", response_class=HTMLResponse)
+async def directory_detail(request: Request, directory_id: int):
+    """Directory Detail page — tabbed interface."""
     conn = _connect_collector()
     conn.row_factory = sqlite3.Row
     try:
         proj = conn.execute(
-            "SELECT id, name, slug, country, status FROM projects WHERE id = ?",
-            (project_id,),
+            "SELECT id, name, slug, country, status, field_tier FROM projects WHERE id = ?",
+            (directory_id,),
         ).fetchone()
     except sqlite3.OperationalError:
         proj = None
@@ -186,37 +390,17 @@ async def directory_detail(request: Request, project_id: int):
     if not proj:
         raise HTTPException(status_code=404, detail="Directory not found")
 
-    # Get stage status
-    stage_status = _get_project_status(project_id)
+    stages = _compute_pipeline_state(directory_id)
+    counts = _directory_counts(directory_id)
+    site_config = _get_site_config(directory_id)
 
-    # Get place count + job stats
-    conn = _connect_collector()
-    conn.row_factory = sqlite3.Row
-    try:
-        place_count = conn.execute(
-            "SELECT COUNT(*) FROM places WHERE project_id = ?", (project_id,)
-        ).fetchone()[0]
-    except Exception:
-        place_count = 0
-
-    try:
-        job_stats = conn.execute(
-            "SELECT status, COUNT(*) as cnt FROM jobs WHERE project_id = ? GROUP BY status",
-            (project_id,),
-        ).fetchall()
-    except Exception:
-        job_stats = []
-    conn.close()
-
-    job_counts = {row["status"]: row["cnt"] for row in job_stats}
-
-    # Get recent runs for this directory
+    # Get recent runs for the Runs tab
     conn = _connect_runs()
     conn.row_factory = sqlite3.Row
     recent_runs = conn.execute(
         "SELECT id, script_name, status, summary, started_at, finished_at, error "
-        "FROM runs WHERE project_id = ? ORDER BY started_at DESC LIMIT(20)",
-        (project_id,),
+        "FROM runs WHERE project_id = ? ORDER BY started_at DESC LIMIT 20",
+        (directory_id,),
     ).fetchall()
     conn.close()
 
@@ -224,12 +408,13 @@ async def directory_detail(request: Request, project_id: int):
     html = tmpl.render(
         request=request,
         project=dict(proj),
-        stage_status=stage_status,
-        place_count=place_count,
-        job_counts=job_counts,
+        directory_id=directory_id,
+        stages=stages,
+        counts=counts,
+        site_config=site_config,
         recent_runs=[dict(r) for r in recent_runs],
-        pipeline_stages=PIPELINE_STAGES,
         script_map=SCRIPT_MAP,
+        PIPELINE_STAGES=PIPELINE_STAGES,
     )
     return HTMLResponse(content=html)
 
@@ -243,62 +428,82 @@ async def settings_page(request: Request):
     return HTMLResponse(content=html)
 
 
-# ── API: Trigger script ────────────────────────────────────────────────────
+# ─── API: Directories ────────────────────────────────────────────────────────
 
-@app.post("/api/run")
-async def api_run_script(script_name: str, project_id: int, params: str = "{}"):
-    """Trigger a standardized script via the runner.
-
-    This is the single entry point for all pipeline actions from the dashboard.
-    """
-    if script_name not in SCRIPT_MAP:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown script: {script_name}. Available: {list(SCRIPT_MAP.keys())}",
-        )
+@app.get("/api/directories")
+async def api_directories(search: str = "", min_places: int = 0):
+    """Overview grid data — all directories."""
+    conn = _connect_collector()
+    conn.row_factory = sqlite3.Row
     try:
-        params_dict = json.loads(params)
-    except json.JSONDecodeError:
-        params_dict = {}
+        rows = conn.execute(
+            "SELECT id, name, slug, country, status, field_tier, search_step_km, created_at, updated_at "
+            "FROM projects ORDER BY created_at DESC"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    conn.close()
 
-    result = run_script(script_name, project_id, params_dict)
-    return JSONResponse(content=result)
+    directories = []
+    for proj in rows:
+        pid = proj["id"]
+        stages = _compute_pipeline_state(pid)
+        counts = _directory_counts(pid)
+        current_stage_label, status_class = _current_stage_label(pid)
+
+        directories.append({
+            "id": pid,
+            "name": proj["name"],
+            "slug": proj["slug"],
+            "country": proj["country"],
+            "status": proj["status"] or "idle",
+            "field_tier": proj["field_tier"] or "Essentials",
+            "place_count": counts["places_collected"],
+            "current_stage": current_stage_label,
+            "status_class": status_class,
+            "stages": stages,
+            "created_at": proj["created_at"] or "",
+        })
+
+    # Apply filters
+    if search:
+        directories = [d for d in directories
+                       if search.lower() in d["name"].lower()
+                       or search.lower() in d["slug"].lower()]
+    if min_places:
+        directories = [d for d in directories if d["place_count"] >= min_places]
+
+    return JSONResponse(content={"directories": directories})
 
 
-# ── API: Project CRUD ────────────────────────────────────────────────────────
+@app.post("/api/directories")
+async def api_create_directory(payload: DirectoryCreate):
+    """New Directory wizard submit."""
+    name = payload.name
+    slug = payload.slug
+    niche_label = payload.niche_label
+    field_tier = payload.field_tier
+    search_step_km = payload.search_step_km
+    search_terms = payload.search_terms
+    target_metros = payload.target_metros or []
+    domain = payload.domain
 
-@app.post("/api/projects")
-async def api_create_project(
-    name: str,
-    niche_label: Optional[str] = "local_service_business",
-    country: Optional[str] = "Australia",
-    field_tier: Optional[str] = "Enterprise",
-    search_step_km: Optional[str] = "10",
-    search_terms: Optional[str] = "[]",
-    target_metros: Optional[str] = "[]",
-):
-    """Create a new directory project (port of dataset-collector pattern)."""
-    import re as re_mod
-    slug = re_mod.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "new-directory"
+    if not slug:
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "new-directory"
 
-    try:
-        terms_list = json.loads(search_terms) if search_terms else []
-        metros_list = json.loads(target_metros) if target_metros else []
-    except json.JSONDecodeError:
-        terms_list = []
-        metros_list = []
+    terms_list = search_terms if search_terms else []
+    metros_list = target_metros if target_metros else []
 
     conn = _connect_collector()
     try:
         cursor = conn.execute(
             "INSERT INTO projects (name, slug, country, status, field_tier, search_step_km) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (name, slug, country, "idle", field_tier, int(search_step_km) if search_step_km else None),
+            (name, slug, "Australia", "idle", field_tier, search_step_km),
         )
         pid = cursor.lastrowid
         conn.commit()
 
-        # Insert search terms
         for term in terms_list:
             conn.execute(
                 "INSERT INTO search_terms (project_id, term) VALUES (?, ?)",
@@ -308,57 +513,144 @@ async def api_create_project(
     finally:
         conn.close()
 
-    return {"success": True, "project_id": pid, "slug": slug, "message": f"Created '{name}' ({slug})"}
+    # Save default site_config
+    if domain:
+        cfg = {"domain": domain, "site_name": name, "niche_label": niche_label or "local_service_business"}
+        _save_site_config(pid, cfg)
+
+    return JSONResponse(content={
+        "success": True, "directory_id": pid, "slug": slug,
+        "message": f"Created '{name}' ({slug})"
+    })
 
 
-@app.put("/api/projects/{project_id}")
-async def api_update_project(project_id: int, name: Optional[str] = None,
-                             slug: Optional[str] = None,
-                             niche_label: Optional[str] = None,
-                             field_tier: Optional[str] = None):
-    """Update a directory project."""
-    updates = {}
-    if name:
-        updates["name"] = name
-    if slug:
-        updates["slug"] = slug
-    if field_tier:
-        updates["field_tier"] = field_tier
+@app.get("/api/directories/{directory_id}")
+async def api_directory_detail(directory_id: int):
+    """Directory Detail header + current stage."""
+    conn = _connect_collector()
+    conn.row_factory = sqlite3.Row
+    try:
+        proj = conn.execute(
+            "SELECT id, name, slug, country, status, field_tier, created_at, updated_at "
+            "FROM projects WHERE id = ?", (directory_id,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        proj = None
+    conn.close()
 
-    if not updates:
-        return {"success": False, "message": "No fields to update"}
+    if not proj:
+        raise HTTPException(status_code=404, detail="Directory not found")
 
+    stages = _compute_pipeline_state(directory_id)
+    counts = _directory_counts(directory_id)
+
+    return JSONResponse(content={
+        "id": directory_id,
+        "name": proj["name"],
+        "slug": proj["slug"],
+        "country": proj["country"],
+        "status": proj["status"] or "idle",
+        "field_tier": proj["field_tier"] or "Essentials",
+        "current_stage": _current_stage_label(directory_id)[0],
+        "status_class": _current_stage_label(directory_id)[1],
+        "place_count": counts["places_collected"],
+        "cleaned_count": counts["places_cleaned"],
+        "feature_count": counts["features_enriched"],
+        "stages": stages,
+        "created_at": proj["created_at"] or "",
+    })
+
+
+@app.delete("/api/directories/{directory_id}")
+async def api_delete_directory(directory_id: int):
+    """Delete a directory (after confirm dialog)."""
     conn = _connect_collector()
     try:
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        params = list(updates.values()) + [project_id]
-        conn.execute(f"UPDATE projects SET {set_clause} WHERE id = ?", params)
+        conn.execute("DELETE FROM projects WHERE id = ?", (directory_id,))
         conn.commit()
     finally:
         conn.close()
+    return JSONResponse(content={"success": True, "message": f"Deleted directory {directory_id}"})
 
-    return {"success": True, "message": f"Updated project {project_id}"}
 
+@app.post("/api/directories/{directory_id}/run")
+async def api_run_script(directory_id: int, body: RunScriptRequest):
+    """Trigger a standardized script via the Phase 3 runner.
 
-@app.delete("/api/projects/{project_id}")
-async def api_delete_project(project_id: int):
-    """Delete a directory project (cascade deletes jobs, places, search_terms, logs)."""
+    Body: { "script_name": "enrichment.enrich", "params": {"skip_ai": true} }
+    Returns immediately with the run result (scripts are synchronous in this v1).
+    """
+    script_name = body.script_name
+    params = body.params
+
+    if script_name not in SCRIPT_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown script: {script_name}. Available: {list(SCRIPT_MAP.keys())}",
+        )
+
+    # Verify project exists
     conn = _connect_collector()
     try:
-        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        conn.commit()
-    finally:
-        conn.close()
+        proj = conn.execute(
+            "SELECT id FROM projects WHERE id = ?", (directory_id,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        proj = None
+    conn.close()
 
-    return {"success": True, "message": f"Deleted project {project_id}"}
+    if not proj:
+        raise HTTPException(status_code=404, detail="Directory not found")
+
+    result = run_script(script_name, directory_id, params)
+    return JSONResponse(content=result)
 
 
-# ── API: Runs history ────────────────────────────────────────────────────────
+@app.get("/api/directories/{directory_id}/places")
+async def api_places(directory_id: int, search: str = "",
+                     min_completeness: int = 0, limit: int = 100, offset: int = 0):
+    """Collect tab places table — search/filter/pagination."""
+    conn = _connect_collector()
+    conn.row_factory = sqlite3.Row
+
+    query = (
+        "SELECT id, place_id, display_name, formatted_address, "
+        "data_completeness_score, search_term, created_at "
+        "FROM places WHERE project_id = ?"
+    )
+    params = [directory_id]
+    if search:
+        query += " AND (display_name LIKE ? OR formatted_address LIKE ? OR search_term LIKE ?)"
+        term = f"%{search}%"
+        params.extend([term, term, term])
+    if min_completeness:
+        query += " AND data_completeness_score >= ?"
+        params.append(min_completeness)
+
+    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
+    rows = conn.execute(query, params).fetchall()
+    total = conn.execute(
+        "SELECT COUNT(*) FROM places WHERE project_id = ?", (directory_id,)
+    ).fetchone()[0]
+
+    conn.close()
+
+    return JSONResponse(content={
+        "places": [dict(r) for r in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    })
+
+
+# ─── API: Runs history ───────────────────────────────────────────────────────
 
 @app.get("/api/runs")
 async def api_runs(project_id: Optional[int] = None, script_name: Optional[str] = "all",
                    status: Optional[str] = "all", limit: int = 50, offset: int = 0):
-    """Get runs history, filtered and paginated."""
+    """Runs tab — paginated + filtered."""
     conn = _connect_runs()
     conn.row_factory = sqlite3.Row
 
@@ -386,119 +678,143 @@ async def api_runs(project_id: Optional[int] = None, script_name: Optional[str] 
 
     rows = conn.execute(query, params).fetchall()
 
-    # Get total count for pagination
-    count_query = "SELECT COUNT(*) FROM runs"
-    if where_clauses:
-        count_query += " WHERE " + " AND ".join(where_clauses)
-    total = conn.execute(count_query, count_params).fetchone()[0]
+    total = conn.execute(
+        "SELECT COUNT(*) FROM runs" + (" WHERE " + " AND ".join(where_clauses) if where_clauses else ""),
+        count_params,
+    ).fetchone()[0]
 
     conn.close()
 
-    return {
+    return JSONResponse(content={
         "runs": [dict(r) for r in rows],
         "total": total,
         "limit": limit,
         "offset": offset,
-    }
+    })
 
 
 @app.get("/api/runs/{run_id}")
 async def api_run_detail(run_id: int):
-    """Get full stdout/stderr for a specific run (Q8 log viewer)."""
+    """Full stdout/stderr for one run (Q8 log viewer)."""
     conn = _connect_runs()
     conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT * FROM runs WHERE id = ?", (run_id,)
-    ).fetchone()
+    row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
     conn.close()
 
     if not row:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    return dict(row)
+    return JSONResponse(content=dict(row))
 
 
-# ── API: Places search/filter ───────────────────────────────────────────────
+# ─── API: Config ────────────────────────────────────────────────────────────
 
-@app.get("/api/projects/{project_id}/places")
-async def api_places(project_id: int, search: str = "", min_completeness: int = 0,
-                     limit: int = 100, offset: int = 0):
-    """Search/filter places for a project (ported from dataset-collector)."""
-    conn = _connect_collector()
-    conn.row_factory = sqlite3.Row
-
-    query = (
-        "SELECT id, place_id, display_name, formatted_address, "
-        "data_completeness_score, search_term, created_at "
-        "FROM places WHERE project_id = ?"
-    )
-    params = [project_id]
-    if search:
-        query += " AND (display_name LIKE ? OR formatted_address LIKE ? OR search_term LIKE ?)"
-        term = f"%{search}%"
-        params.extend([term, term, term])
-    if min_completeness:
-        query += " AND data_completeness_score >= ?"
-        params.append(min_completeness)
-
-    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
-
-    rows = conn.execute(query, params).fetchall()
-    total = conn.execute(
-        "SELECT COUNT(*) FROM places WHERE project_id = ?", (project_id,)
-    ).fetchone()[0]
-
-    conn.close()
-
-    return {
-        "places": [dict(r) for r in rows],
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
-
-
-# ── API: Cloudflare Analytics pass-through (Phase 8.10) ─────────────────────
-
-@app.get("/api/analytics")
-async def api_analytics(account_id: Optional[str] = None, database_id: Optional[str] = None,
-                        d1_token: Optional[str] = None):
-    """Pass-through to Cloudflare Analytics API.
-
-    Fetches requests, visitors, cache percentage, and top pages for a site.
-    """
-    import os as _os
-    token = d1_token or _os.getenv("CLOUDFLARE_API_TOKEN")
-    acct = account_id or _os.getenv("CLOUDFLARE_ACCOUNT_ID")
-
-    if not token or not acct:
-        raise HTTPException(
-            status_code=401,
-            detail="Cloudflare credentials not available",
-        )
-
-    headers = {"Authorization": f"Bearer {token}"}
-    import requests as req
-    url = f"https://api.cloudflare.com/client/v4/accounts/{acct}/events"
-    resp = req.get(url, headers=headers, timeout=10)
-
-    return JSONResponse(content={"cloudflare_response": resp.json()})
-
-
-# ── API: Credential testing (Phase 8.13 Settings) ───────────────────────────
-
-@app.post("/api/settings/test")
-async def api_test_credential(key: Optional[str] = None):
-    """Test a single credential by making a trivial API call."""
+@app.get("/api/directories/{directory_id}/config")
+async def api_directory_config(directory_id: int):
+    """Config tab load — reads site_config from runs.db."""
+    config = _get_site_config(directory_id)
     env = _read_env()
-    value = env.get(key, "")
 
-    if not value:
-        return {"tested": key, "valid": False, "message": "Not set in .env"}
+    # Merge in defaults
+    defaults = {
+        "site_name": config.get("site_name", ""),
+        "tagline": config.get("tagline", ""),
+        "niche_label": config.get("niche_label", env.get("DEFAULT_NICHE_LABEL", "local_service_business")),
+        "domain": config.get("domain", ""),
+        "theme_primary_color": config.get("theme_primary_color", "#14b8a3"),
+        "theme_secondary_color": config.get("theme_secondary_color", "#1e293b"),
+        "logo_url": config.get("logo_url", ""),
+        "contact_email": config.get("contact_email", ""),
+        "contact_phone": config.get("contact_phone", ""),
+        "social_links": config.get("social_links", {}),
+        "legal_privacy_copy": config.get("legal_privacy_copy", ""),
+        "legal_terms_copy": config.get("legal_terms_copy", ""),
+        "og_image_url": config.get("og_image_url", ""),
+    }
+    return JSONResponse(content={"config": defaults})
+
+
+@app.put("/api/directories/{directory_id}/config")
+async def api_update_directory_config(directory_id: int, config: dict):
+    """Config tab save — persists to site_config in runs.db."""
+    _save_site_config(directory_id, config)
+    return JSONResponse(content={"success": True, "message": "Config saved"})
+
+
+# ─── API: Live Stats (Cloudflare Analytics pass-through) ────────────────────
+
+@app.get("/api/directories/{directory_id}/live-stats")
+async def api_live_stats(directory_id: int):
+    """Live Stats tab — pass-through to Cloudflare Analytics API."""
+    from datetime import datetime, timedelta
+
+    env = _read_env()
+    token = env.get("CLOUDFLARE_API_TOKEN")
+    account_id = env.get("CLOUDFLARE_ACCOUNT_ID")
+
+    if not token or not account_id:
+        return JSONResponse(content={
+            "error": "Cloudflare credentials not configured",
+            "requests": 0, "visitors": 0, "cache_hit_rate": 0,
+            "top_pages": [],
+        })
 
     try:
-        if key == "GOOGLE_PLACES_API_KEY":
+        import httpx
+        # Cloudflare Analytics — last 7 days
+        end = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        start = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        headers = {"Authorization": f"Bearer {token}"}
+        url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/events"
+        resp = httpx.get(url, headers=headers, timeout=10)
+
+        cf_data = resp.json() if resp.status_code == 200 else {}
+
+        return JSONResponse(content={
+            "requests": cf_data.get("total", 0),
+            "visitors": cf_data.get("unique_visitors", 0),
+            "cache_hit_rate": cf_data.get("cache_hit_rate", 0),
+            "top_pages": cf_data.get("top_pages", []),
+        })
+    except Exception as e:
+        return JSONResponse(content={
+            "error": str(e),
+            "requests": 0, "visitors": 0, "cache_hit_rate": 0,
+            "top_pages": [],
+        })
+
+
+# ─── API: Settings ──────────────────────────────────────────────────────────
+
+@app.get("/api/settings")
+async def api_get_settings():
+    """Settings page — read all credentials from .env."""
+    return JSONResponse(content=_read_env())
+
+
+@app.put("/api/settings")
+async def api_update_settings(settings: dict):
+    """Settings page — save credentials to .env."""
+    env = _read_env()
+    env.update(settings)
+    _write_env(env)
+    return JSONResponse(content={"success": True, "message": "Settings saved to .env"})
+
+
+@app.post("/api/settings/test/{credential}")
+async def api_test_credential(credential: str):
+    """Test a single credential by making a trivial API call."""
+    env = _read_env()
+    value = env.get(credential, "")
+
+    if not value:
+        return JSONResponse(content={
+            "tested": credential, "valid": False, "message": "Not set in .env"
+        })
+
+    try:
+        if credential == "GOOGLE_PLACES_API_KEY":
             import httpx
             resp = httpx.get(
                 "https://places.googleapis.com/v1/places:searchText",
@@ -507,22 +823,22 @@ async def api_test_credential(key: Optional[str] = None):
                 timeout=10,
             )
             ok = resp.status_code == 200
-        elif key == "GEMINI_API_KEY":
+        elif credential == "GEMINI_API_KEY":
             import google.genai as genai
             client = genai.Client(api_key=value)
-            models = list(client.models.list())  # noqa
+            models = list(client.models.list())
             ok = len(models) > 0
-        elif key == "CLOUDFLARE_API_TOKEN":
-            import requests as req
-            resp = req.get(
+        elif credential == "CLOUDFLARE_API_TOKEN":
+            import httpx
+            resp = httpx.get(
                 "https://api.cloudflare.com/client/v4/user/tokens/verify",
                 headers={"Authorization": f"Bearer {value}"},
                 timeout=10,
             )
             ok = resp.status_code == 200
-        elif key == "GITHUB_TOKEN":
-            import requests as req
-            resp = req.get(
+        elif credential == "GITHUB_TOKEN":
+            import httpx
+            resp = httpx.get(
                 "https://api.github.com/user",
                 headers={"Authorization": f"token {value}"},
                 timeout=10,
@@ -530,83 +846,30 @@ async def api_test_credential(key: Optional[str] = None):
             ok = resp.status_code == 200
         else:
             ok = False
-        return {"tested": key, "valid": ok, "message": "OK" if ok else "Test failed"}
+            return JSONResponse(content={
+                "tested": credential, "valid": False, "message": f"Unknown credential: {credential}"
+            })
+
+        return JSONResponse(content={
+            "tested": credential, "valid": ok,
+            "message": "OK" if ok else "Test failed"
+        })
     except Exception as e:
-        return {"tested": key, "valid": False, "message": str(e)}
+        return JSONResponse(content={
+            "tested": credential, "valid": False, "message": str(e)
+        })
 
 
-@app.post("/api/settings/save")
-async def api_save_settings(settings: str):
-    """Save settings to .env"""
-    try:
-        settings_dict = json.loads(settings)
-    except json.JSONDecodeError:
-        settings_dict = {}
-
-    env = _read_env()
-    env.update(settings_dict)
-    _write_env(env)
-
-    return {"success": True, "message": "Settings saved to .env"}
-
-
-# ── API: Project status for pipeline stepper ─────────────────────────────────
-
-@app.get("/api/projects/{project_id}/status")
-async def api_project_status(project_id: int):
-    """Get pipeline status for a project — one headline per stage."""
-    stage_status = _get_project_status(project_id)
-    status_info = {}
-    for script_name, label, icon in PIPELINE_STAGES:
-        run = stage_status.get(script_name)
-        status_info[script_name] = {
-            "label": label,
-            "icon": icon,
-            "status": run["status"] if run else "not_started",
-            "started_at": run["started_at"] if run else None,
-        }
-
-    # Get place count
-    conn = _connect_collector()
-    try:
-        place_count = conn.execute(
-            "SELECT COUNT(*) FROM places WHERE project_id = ?", (project_id,)
-        ).fetchone()[0]
-    except Exception:
-        place_count = 0
-    conn.close()
-
-    # Get project name
-    conn = _connect_collector()
-    conn.row_factory = sqlite3.Row
-    try:
-        proj = conn.execute(
-            "SELECT name, slug FROM projects WHERE id = ?", (project_id,)
-        ).fetchone()
-    except Exception:
-        proj = None
-    conn.close()
-
-    return {
-        "project_id": project_id,
-        "project_name": proj["name"] if proj else "",
-        "project_slug": proj["slug"] if proj else "",
-        "place_count": place_count,
-        "stages": status_info,
-    }
-
-
-# ── Entry point ─────────────────────────────────────────────────────────────
+# ─── Entry point ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
-    import argparse as _argparse
+    import argparse
 
-    parser = _argparse.ArgumentParser(description="Directory Factory Dashboard")
+    parser = argparse.ArgumentParser(description="Directory Factory Dashboard")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
 
     uvicorn.run("dashboard.app:app", host=args.host, port=args.port, reload=args.reload)
-
