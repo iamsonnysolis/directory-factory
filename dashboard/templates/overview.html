@@ -17,19 +17,19 @@
 <!-- Summary stat tiles -->
 <div class="stat-tiles">
   <div class="stat-tile">
-    <span class="stat-tile-value">{{ stat_total_dirs }}</span>
+    <span class="stat-tile-value">{{ stat_total_dirs | format_int }}</span>
     <span class="stat-tile-label">Total Directories</span>
   </div>
   <div class="stat-tile">
-    <span class="stat-tile-value">{{ stat_places_collected }}</span>
+    <span class="stat-tile-value">{{ stat_places_collected | format_int }}</span>
     <span class="stat-tile-label">Places Collected</span>
   </div>
   <div class="stat-tile">
-    <span class="stat-tile-value">{{ stat_live_sites }}</span>
+    <span class="stat-tile-value">{{ stat_live_sites | format_int }}</span>
     <span class="stat-tile-label">Live Sites</span>
   </div>
   <div class="stat-tile">
-    <span class="stat-tile-value">{{ stat_monthly_visits }}</span>
+    <span class="stat-tile-value">{{ stat_monthly_visits | format_int }}</span>
     <span class="stat-tile-label">Monthly Visits</span>
   </div>
 </div>
