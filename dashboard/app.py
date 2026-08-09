@@ -42,6 +42,19 @@ _templates = Environment(
 )
 _templates.globals["enumerate"] = enumerate
 
+
+def _format_int(value):
+    """Format an integer with thousands separators (e.g. 42 → '42', 1234 → '1,234')."""
+    if value is None:
+        return "0"
+    try:
+        return f"{int(value):,}"
+    except (ValueError, TypeError):
+        return str(value)
+
+
+_templates.filters["format_int"] = _format_int
+
 app = FastAPI(title="Directory Factory Dashboard", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(_DASHBOARD_DIR / "static")), name="static")
 
