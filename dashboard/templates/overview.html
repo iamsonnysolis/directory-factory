@@ -5,7 +5,7 @@
 <div class="overview-header">
   <div>
     <h1>
-      {% if view == 'pipeline' %}Pipeline{% elif view == 'deploy' %}Deploy{% else %}Directories{{ '' }}{% endif %}
+      {% if view == 'pipeline' %}Pipeline{% elif view == 'deploy' %}Deploy{% else %}Directories{% endif %}
     </h1>
     <p class="overview-subhead">
       {% if view == 'pipeline' %}Directories grouped by current pipeline stage{% elif view == 'deploy' %}Directories ready to deploy or live{% else %}All directories in one grid{% endif %}
@@ -14,42 +14,94 @@
   <button class="btn btn-primary" id="open-new-directory">＋ New Directory</button>
 </div>
 
+<!-- Summary stat tiles -->
+<div class="stat-tiles">
+  <div class="stat-tile">
+    <span class="stat-tile-value">{{ stat_total_dirs }}</span>
+    <span class="stat-tile-label">Total Directories</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-tile-value">{{ stat_places_collected }}</span>
+    <span class="stat-tile-label">Places Collected</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-tile-value">{{ stat_live_sites }}</span>
+    <span class="stat-tile-label">Live Sites</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-tile-value">{{ stat_monthly_visits }}</span>
+    <span class="stat-tile-label">Monthly Visits</span>
+  </div>
+</div>
+
+<!-- Search / Filter / Sort row -->
+<div class="toolbar-row">
+  <input type="text" id="dir-search" placeholder="Search directories…" class="search-input" value="{{ search_param }}">
+  <select id="status-filter" class="filter-select">
+    <option value="">All statuses</option>
+    <option value="not_started">Not Started</option>
+    <option value="collecting">Collecting</option>
+    <option value="cleaning">Cleaning</option>
+    <option value="enriching">Enriching</option>
+    <option value="uploading">Uploading</option>
+    <option value="deploying">Deploying</option>
+    <option value="live">Live</option>
+    <option value="error">Error</option>
+  </select>
+  <select id="sort-by" class="sort-select">
+    <option value="updated_at">Last updated</option>
+    <option value="name">Name</option>
+    <option value="place_count">Places</option>
+    <option value="current_stage">Stage</option>
+  </select>
+  <select id="sort-order" class="sort-select">
+    <option value="desc">Desc</option>
+    <option value="asc">Asc</option>
+  </select>
+</div>
+
 {% if directories | length == 0 %}
 <div class="card-empty">
   <p>No directories found. Create one to get started.</p>
   <button class="btn btn-primary" id="open-new-directory-2">＋ New Directory</button>
 </div>
 {% else %}
-<div class="project-grid">
+<div class="project-grid" id="project-grid">
   {% for d in directories %}
-  <div class="project-card" data-directory-id="{{ d.id }}">
+  <div class="project-card" data-directory-id="{{ d.id }}"
+       data-status-class="{{ d.status_class }}"
+       data-current-stage="{{ d.current_stage }}">
     <div class="project-card-header">
       <div>
         <div class="project-card-name">{{ d.name }}</div>
-        <div class="project-meta">
-          <span>{{ d.field_tier }}</span>
-          <span>•</span>
-          <span class="count">{{ d.place_count }} places</span>
-        </div>
       </div>
-      <span class="status-pill status-{{ d.status_class }}">{{ d.current_stage }}</span>
+      <span class="status-pill status-{{ d.status_class }}">
+        {% if d.status_class == 'running' %}<span class="pulse-dot"></span>{% endif %}
+        {{ d.current_stage }}
+      </span>
     </div>
 
-    <div class="pipeline-stepper" id="stepper-{{ d.id }}">
+    <!-- 6-dot pipeline stepper -->
+    <div class="pipeline-stepper" data-directory-id="{{ d.id }}">
       {% for s in d.stages %}
-        {% if not loop.first %}<div class="dot-divider"></div>{% endif %}
-        <div class="pipeline-dot dot-{{ s.state }}" title="{{ s.label }}"></div>
+        <div class="stepper-dot
+          {% if s.state == 'done' %}stepper-dot-done{% elif s.state == 'running' %}stepper-dot-running{% elif s.state == 'error' %}stepper-dot-error{% else %}stepper-dot-not-started{% endif %}"
+          title="{{ s.label }}"></div>
       {% endfor %}
     </div>
 
+    <div class="project-meta">
+      <span class="count">{{ d.place_count }} places</span>
+      <span class="updated">Updated {{ (d.updated_at or d.created_at).split('T')[0] if (d.updated_at or d.created_at) else '—' }}</span>
+    </div>
+
     <div class="project-card-footer">
-      <span class="updated">Updated {{ d.created_at.split('T')[0] if d.created_at else '—' }}</span>
-      <div class="card-actions">
-        <a href="/directories/{{ d.id }}" class="btn btn-sm">View</a>
-        {% if d.current_stage == 'Live' %}
-        <a href="#" class="btn btn-sm btn-ghost">View Live ↗</a>
-        {% endif %}
-      </div>
+      <button class="btn btn-sm btn-primary card-action-btn"
+        data-dir-id="{{ d.id }}"
+        data-stage="{{ d.current_stage }}"
+        data-status-class="{{ d.status_class }}">
+        {{ d.action_button_label }}
+      </button>
     </div>
   </div>
   {% endfor %}
@@ -115,9 +167,7 @@
 {% endblock %}
 {% block extra_js %}
 <script>
-  document.getElementById('dir-name').addEventListener('input', function() {
-    const slug = this.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-    document.getElementById('dir-slug').value = slug;
-  });
+  const OVERVIEW_VIEW = "{{ view or 'overview' }}";
+  const SEARCH_PARAM = "{{ search_param or '' }}";
 </script>
 {% endblock %}

@@ -219,20 +219,97 @@ body {
   margin: 12px 0;
 }
 
-.pipeline-dot {
+/* Stat Tiles */
+.stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.stat-tile {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.stat-tile-value {
+  display: block;
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.stat-tile-label {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+}
+
+/* Toolbar Row */
+.toolbar-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  align-items: center;
+}
+
+.search-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.filter-select,
+.sort-select {
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  background: var(--color-card);
+  cursor: pointer;
+}
+
+/* Pipeline Stepper (6-dot) */
+.pipeline-stepper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 12px 0;
+}
+
+.stepper-dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 6px;
+  flex-shrink: 0;
 }
 
-.dot-not-started { background: var(--color-not-started); }
-.dot-running { background: var(--color-running); animation: pulse 1.5s infinite; }
-.dot-done { background: var(--color-done); }
-.dot-error { background: var(--color-error); }
+.stepper-dot-done {
+  background: var(--color-done);
+}
+
+.stepper-dot-running {
+  background: var(--color-running);
+  animation: pulse 1.5s infinite;
+}
+
+.stepper-dot-error {
+  background: var(--color-error);
+}
+
+.stepper-dot-not-started {
+  background: var(--color-not-started);
+}
 
 .dot-divider {
   flex: 1;
@@ -240,24 +317,30 @@ body {
   background: var(--color-border);
 }
 
-@keyframes pulse {
+/* Pulse dot for running status pills */
+.pulse-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-running);
+  margin-right: 4px;
+  animation: pulse 1.5s infinite;
+}
+
+/* Status pills — pulsing animation for running state */
+.status-running {
+  background: #dbeafe;
+  color: #1d4ed8;
+  animation: pulse-bg 2s infinite;
+}
+
+@keyframes pulse-bg {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  50% { opacity: 0.7; }
 }
 
-.project-meta {
-  display: flex;
-  gap: 16px;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  margin: 12px 0;
-}
-
-.project-meta .count {
-  font-weight: 600;
-  color: var(--color-text);
-}
-
+/* Card footer */
 .project-card-footer {
   margin-top: 12px;
   padding-top: 12px;

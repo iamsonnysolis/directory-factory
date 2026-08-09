@@ -255,16 +255,21 @@ def _current_stage_label(project_id: int) -> tuple[str, str]:
     status_class matches CSS: not-started / running / done / error
     """
     stages = _compute_pipeline_state(project_id)
-
     for s in stages:
         if s["state"] == "running":
             return s["label"], "running"
         elif s["state"] == "error":
             return "Error", "error"
         elif s["state"] == "not_started":
-            # If it's the first not-started stage, show "Idea" for status text
-            return s["label"], "not-started"
-
+            # If it's the first not-started stage and no prior stage is done,
+            # show "Idea" for status text
+            # (i.e., the directory hasn't started any work yet)
+            prior_stages = stages[:stages.index(s)]
+            if not any(p["state"] == "done" for p in prior_stages):
+                return "Idea", "not-started"
+            else:
+                # A prior stage is done but this one hasn't started → show the stage label
+                return s["label"], "not-started"
     return "Live", "done"
 
 
@@ -318,57 +323,68 @@ async def overview(request: Request, view: str = "overview"):
 
     # Build directory cards
     cards = []
+    total_places = 0
+    live_count = 0
     for proj in projects:
         pid = proj["id"]
         stages = _compute_pipeline_state(pid)
         counts = _directory_counts(pid)
         current_stage_label, status_class = _current_stage_label(pid)
+        total_places += counts["places_collected"]
+        if status_class == "done" and current_stage_label == "Live":
+            live_count += 1
 
-        # Determine headline metric and status
-        if current_stage_label in ("Collecting", "Clean"):
-            metric = f"{counts['places_collected']} places"
-        elif current_stage_label in ("Cleaning",):
-            metric = f"{counts['places_cleaned']} places"
-        elif current_stage_label in ("Enriching",):
-            metric = f"{counts['features_enriched']} features"
-        elif current_stage_label in ("Uploading",):
-            metric = "Uploading"
-        elif current_stage_label in ("Deploying",):
-            metric = "Ready to deploy"
-        elif current_stage_label in ("Live",):
-            metric = "Live"
-        else:
-            metric = f"{counts['places_collected']} places"
+        # Stage → action button label (spec Q: Start Collection / Run Cleaning / Run Enrichment / Upload to D1 / Deploy / View Live)
+        action_labels = {
+            "Idea": "Start Collection",
+            "Collecting": "Run Collection",
+            "Cleaning": "Run Cleaning",
+            "Enriching": "Run Enrichment",
+            "Uploading": "Upload to D1",
+            "Deploying": "Deploy",
+            "Live": "View Live ↗",
+            "Error": "Re-run",
+        }
 
         card = {
             "id": pid,
             "name": proj["name"],
             "slug": proj["slug"],
-            "status": proj["status"] or "idle",
-            "field_tier": proj["field_tier"] or "Essentials",
             "place_count": counts["places_collected"],
             "current_stage": current_stage_label,
             "status_class": status_class,
-            "metric": metric,
             "stages": stages,
             "created_at": proj["created_at"] or "",
+            "updated_at": proj["updated_at"] or "",
+            "action_button_label": action_labels.get(current_stage_label, "Start Collection"),
         }
         cards.append(card)
 
-    # Apply view filter
+    # Apply view filter (IA simplification: Pipeline/Deploy = same grid, different filter/sort)
     if view == "pipeline":
         # Sort by current stage
         stage_order_map = {s[1]: i for i, s in enumerate(PIPELINE_STAGES)}
         cards.sort(key=lambda c: stage_order_map.get(c["current_stage"], 99))
     elif view == "deploy":
         # Filter to Deploy-done-or-later
-        cards = [c for c in cards if c["current_stage"] in ("Deploy", "Live")]
+        cards = [c for c in cards if c["current_stage"] in ("Deploying", "Live")]
+
+    # Stat tiles data
+    stat_total_dirs = len(cards)
+    stat_places_collected = total_places
+    stat_live_sites = live_count
+    stat_monthly_visits = 0  # placeholder until Cloudflare Analytics integrated
 
     tmpl = _templates.get_template("overview.html")
     html = tmpl.render(
         request=request,
         directories=cards,
         view=view,
+        search_param=request.query_params.get("search", ""),
+        stat_total_dirs=stat_total_dirs,
+        stat_places_collected=stat_places_collected,
+        stat_live_sites=stat_live_sites,
+        stat_monthly_visits=stat_monthly_visits,
     )
     return HTMLResponse(content=html)
 
@@ -431,8 +447,25 @@ async def settings_page(request: Request):
 # ─── API: Directories ────────────────────────────────────────────────────────
 
 @app.get("/api/directories")
-async def api_directories(search: str = "", min_places: int = 0):
-    """Overview grid data — all directories."""
+async def api_directories(
+    search: str = "",
+    min_places: int = 0,
+    status_filter: str = "",
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    limit: int = 100,
+    offset: int = 0,
+):
+    """Overview grid data — all directories with optional filters/sort.
+
+    query params:
+    - search: search by name or slug
+    - min_places: minimum place count filter
+    - status_filter: filter by current stage label (e.g. \"Collecting\", \"Live\", \"Error\")
+    - sort_by: created_at, name, place_count, current_stage
+    - sort_order: asc or desc
+    - limit/offset: pagination
+    """
     conn = _connect_collector()
     conn.row_factory = sqlite3.Row
     try:
@@ -463,6 +496,7 @@ async def api_directories(search: str = "", min_places: int = 0):
             "status_class": status_class,
             "stages": stages,
             "created_at": proj["created_at"] or "",
+            "updated_at": proj["updated_at"] or "",
         })
 
     # Apply filters
@@ -472,8 +506,73 @@ async def api_directories(search: str = "", min_places: int = 0):
                        or search.lower() in d["slug"].lower()]
     if min_places:
         directories = [d for d in directories if d["place_count"] >= min_places]
+    if status_filter:
+        directories = [d for d in directories if d["current_stage"].lower() == status_filter.lower()]
 
-    return JSONResponse(content={"directories": directories})
+    # Sort
+    if sort_by == "place_count":
+        directories.sort(key=lambda d: d["place_count"], reverse=(sort_order == "desc"))
+    elif sort_by == "name":
+        directories.sort(key=lambda d: d["name"].lower(), reverse=(sort_order == "desc"))
+    elif sort_by == "current_stage":
+        directories.sort(key=lambda d: d["current_stage"], reverse=(sort_order == "desc"))
+    else:
+        directories.sort(key=lambda d: d.get("updated_at", d.get("created_at", "")),
+                         reverse=(sort_order == "desc"))
+
+    # Pagination
+    total = len(directories)
+    directories = directories[offset:offset + limit]
+
+    return JSONResponse(content={"directories": directories, "total": total})
+
+
+@app.get("/api/directories/stats")
+async def api_directory_stats():
+    """Summary stats for the Overview stat tiles.
+
+    Returns:
+    - total_directories: count of all directories
+    - places_collected: sum of collected places across all directories
+    - live_sites: count of directories at Live stage
+    - monthly_visits: estimate (placeholder until Cloudflare Analytics integrated)
+    """
+    conn = _connect_collector()
+    conn.row_factory = sqlite3.Row
+    try:
+        total_dirs = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] or 0
+        total_places = conn.execute("SELECT COUNT(*) FROM places").fetchone()[0] or 0
+    except sqlite3.OperationalError:
+        total_dirs = 0
+        total_places = 0
+    conn.close()
+
+    # Count live directories from runs.db
+    conn_runs = _connect_runs()
+    conn_runs.row_factory = sqlite3.Row
+    try:
+        live_rows = conn_runs.execute(
+            "SELECT DISTINCT project_id FROM runs WHERE script_name = 'deploy.provision' AND status = 'success'"
+        ).fetchall()
+        live_count = len(live_rows)
+    except sqlite3.OperationalError:
+        live_count = 0
+    conn_runs.close()
+
+    # Monthly visits — placeholder until Cloudflare Analytics integration
+    monthly_visits = 0
+    env_dict = _read_env()
+    if env_dict.get("cloudflare_api_token"):
+        # Would call Cloudflare Analytics API here
+        monthly_visits = 0  # placeholder
+
+    return JSONResponse(content={
+        "total_directories": total_dirs,
+        "places_collected": total_places,
+        "live_sites": live_count,
+        "monthly_visits": monthly_visits,
+    })
+
 
 
 @app.post("/api/directories")
@@ -570,6 +669,16 @@ async def api_delete_directory(directory_id: int):
         conn.commit()
     finally:
         conn.close()
+
+    # Also clean up runs in runs.db
+    try:
+        conn_runs = _connect_runs()
+        conn_runs.execute("DELETE FROM runs WHERE project_id = ?", (directory_id,))
+        conn_runs.commit()
+        conn_runs.close()
+    except Exception:
+        pass
+
     return JSONResponse(content={"success": True, "message": f"Deleted directory {directory_id}"})
 
 

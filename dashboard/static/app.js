@@ -252,6 +252,7 @@
   };
 
   // ─── Delete confirmation ─────────────────────────────────────────────────
+  // The ONE AND ONLY confirm dialog in the entire UI (per spec)
   const deleteModal = document.getElementById('delete-confirm-modal');
   const deleteBtn = document.getElementById('delete-directory');
   const cancelDeleteBtn = document.getElementById('cancel-delete');
@@ -259,6 +260,9 @@
 
   if (deleteBtn && deleteModal) {
     deleteBtn.addEventListener('click', function() {
+      var dirName = deleteBtn.dataset.name || 'this directory';
+      var nameEl = document.getElementById('delete-dir-name');
+      if (nameEl) nameEl.textContent = dirName;
       deleteModal.classList.add('active');
     });
   }
@@ -410,5 +414,161 @@
   }
 
   loadPlaces();
+
+  // ─── Overview: Stage-contextual action buttons ──────────────────────────
+  // Maps current_stage → script_name for the card action button
+  var STAGE_SCRIPT_MAP = {
+    'Idea': 'collection.collect',
+    'Collecting': 'collection.collect',
+    'Cleaning': 'cleaning.clean',
+    'Enriching': 'enrichment.enrich',
+    'Uploading': 'upload.d1',
+    'Deploying': 'deploy.provision',
+    'Live': null,  // no action — "View Live ↗" navigates to detail page
+    'Error': null, // re-run via detail page
+  };
+
+  // Handle card action button clicks on Overview page
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('.card-action-btn');
+    if (!btn) return;
+
+    var dirId = btn.dataset.dirId;
+    var stage = btn.dataset.stage;
+    var statusClass = btn.dataset.statusClass;
+
+    // Live → go to detail page; Error → also go to detail page for re-run
+    if (stage === 'Live' || statusClass === 'error') {
+      window.location.href = '/directories/' + dirId;
+      return;
+    }
+
+    // For other stages, navigate to the detail page which has the run button
+    window.location.href = '/directories/' + dirId;
+  });
+
+  // ─── Overview: Search/Filter/Sort ────────────────────────────────────────
+  var dirSearch = document.getElementById('dir-search');
+  var statusFilter = document.getElementById('status-filter');
+  var sortBy = document.getElementById('sort-by');
+  var sortOrder = document.getElementById('sort-order');
+  var projectGrid = document.getElementById('project-grid');
+
+  function getQueryParam(name) {
+    var params = new URLSearchParams(window.location.search);
+    return params.get(name) || '';
+  }
+
+  function setQueryParam(name, value) {
+    var params = new URLSearchParams(window.location.search);
+    if (value) {
+      params.set(name, value);
+    } else {
+      params.delete(name);
+    }
+    var qs = params.toString();
+    var url = qs ? window.location.pathname + '?' + qs : window.location.pathname;
+    window.history.replaceState({}, '', url);
+  }
+
+  function applyFilters() {
+    if (!projectGrid) return;
+
+    var searchTerm = dirSearch ? dirSearch.value.toLowerCase() : '';
+    var statusVal = statusFilter ? statusFilter.value : '';
+    var sortByVal = sortBy ? sortBy.value : 'updated_at';
+    var sortOrderVal = sortOrder ? sortOrder.value : 'desc';
+
+    // Sync URL params
+    setQueryParam('search', searchTerm);
+    if (statusVal) setQueryParam('status', statusVal); else setQueryParam('status', '');
+    setQueryParam('sort_by', sortByVal);
+    setQueryParam('sort_order', sortOrderVal);
+
+    var cards = Array.from(projectGrid.querySelectorAll('.project-card'));
+    cards.forEach(function(card) {
+      var name = card.querySelector('.project-card-name').textContent.toLowerCase();
+      var stage = card.dataset.currentStage.toLowerCase();
+      var statusClass = card.dataset.statusClass;
+      var updatedAt = card.querySelector('.updated').textContent;
+
+      // Search filter
+      var matchesSearch = !searchTerm || name.indexOf(searchTerm) !== -1;
+
+      // Status filter
+      var matchesStatus = !statusVal || statusClass === statusVal;
+
+      card.style.display = (matchesSearch && matchesStatus) ? '' : 'none';
+    });
+
+    // Sort
+    var visibleCards = cards.filter(function(c) { return c.style.display !== 'none'; });
+    visibleCards.sort(function(a, b) {
+      var aVal, bVal;
+      if (sortByVal === 'name') {
+        aVal = a.querySelector('.project-card-name').textContent;
+        bVal = b.querySelector('.project-card-name').textContent;
+      } else if (sortByVal === 'place_count') {
+        aVal = parseInt(a.querySelector('.count').textContent) || 0;
+        bVal = parseInt(b.querySelector('.count').textContent) || 0;
+      } else if (sortByVal === 'current_stage') {
+        aVal = a.dataset.currentStage;
+        bVal = b.dataset.currentStage;
+      } else {
+        aVal = a.querySelector('.updated').textContent;
+        bVal = b.querySelector('.updated').textContent;
+      }
+
+      if (typeof aVal === 'string' && typeof bVal === 'string') {
+        return sortOrderVal === 'desc'
+          ? bVal.localeCompare(aVal)
+          : aVal.localeCompare(bVal);
+      } else {
+        return sortOrderVal === 'desc' ? bVal - aVal : aVal - bVal;
+      }
+    });
+
+    // Re-append in sorted order
+    visibleCards.forEach(function(card) {
+      projectGrid.appendChild(card);
+    });
+  }
+
+  // Initialize filter controls from URL params
+  if (dirSearch) {
+    var urlSearch = getQueryParam('search');
+    if (urlSearch) dirSearch.value = urlSearch;
+    dirSearch.addEventListener('input', function() { setTimeout(applyFilters, 300); });
+  }
+
+  if (statusFilter) {
+    var urlStatus = getQueryParam('status');
+    if (urlStatus) statusFilter.value = urlStatus;
+    statusFilter.addEventListener('change', applyFilters);
+  }
+
+  if (sortBy) {
+    var urlSort = getQueryParam('sort_by');
+    if (urlSort) sortBy.value = urlSort;
+    sortBy.addEventListener('change', applyFilters);
+  }
+
+  if (sortOrder) {
+    var urlOrder = getQueryParam('sort_order');
+    if (urlOrder) sortOrder.value = urlOrder;
+    sortOrder.addEventListener('change', applyFilters);
+  }
+
+  // Apply URL-based filters on page load
+  if (projectGrid) {
+    var urlSearchTerm = getQueryParam('search');
+    if (urlSearchTerm) {
+      var cards = projectGrid.querySelectorAll('.project-card');
+      cards.forEach(function(card) {
+        var name = card.querySelector('.project-card-name').textContent.toLowerCase();
+        card.style.display = name.indexOf(urlSearchTerm.toLowerCase()) !== -1 ? '' : 'none';
+      });
+    }
+  }
 
 })();
