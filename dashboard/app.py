@@ -274,15 +274,21 @@ def _current_stage_label(project_id: int) -> tuple[str, str]:
         elif s["state"] == "error":
             return "Error", "error"
         elif s["state"] == "not_started":
-            # If it's the first not-started stage and no prior stage is done,
-            # show "Idea" for status text
-            # (i.e., the directory hasn't started any work yet)
             prior_stages = stages[:stages.index(s)]
             if not any(p["state"] == "done" for p in prior_stages):
                 return "Idea", "not-started"
             else:
-                # A prior stage is done but this one hasn't started → show the stage label
-                return s["label"], "not-started"
+                # A prior stage is done but this one hasn't started → show the
+                # last completed stage's label with "done" status (teal)
+                last_done = None
+                for p in reversed(prior_stages):
+                    if p["state"] == "done":
+                        last_done = p
+                        break
+                if last_done:
+                    return last_done["label"], "done"
+                else:
+                    return s["label"], "not-started"
     return "Live", "done"
 
 
@@ -379,8 +385,11 @@ async def overview(request: Request, view: str = "overview"):
         stage_order_map = {s[1]: i for i, s in enumerate(PIPELINE_STAGES)}
         cards.sort(key=lambda c: stage_order_map.get(c["current_stage"], 99))
     elif view == "deploy":
-        # Filter to Deploy-done-or-later
-        cards = [c for c in cards if c["current_stage"] in ("Deploying", "Live")]
+        # Filter to Upload-done-or-later (directories that have completed the
+        # Upload stage or beyond). This includes directories showing their last
+        # completed stage as Upload/Deploy/Live.
+        deploy_stages = {"Uploading", "Deploying", "Live"}
+        cards = [c for c in cards if c["current_stage"] in deploy_stages]
 
     # Stat tiles data
     stat_total_dirs = len(cards)

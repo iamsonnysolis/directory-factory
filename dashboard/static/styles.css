@@ -209,7 +209,7 @@ body {
 
 .status-not-started { background: #f3f4f6; color: #6b7280; }
 .status-running { background: #dbeafe; color: #1d4ed8; }
-.status-done { background: #d1fae5; color: #065f46; }
+.status-done { background: #d1fae5; color: #065f46; }  /* teal */
 .status-error { background: #fee2e2; color: #991b1b; }
 
 .pipeline-stepper {
