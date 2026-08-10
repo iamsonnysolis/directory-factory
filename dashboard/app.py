@@ -35,7 +35,7 @@ with open(_STAGES_CONFIG_PATH, "r") as _f:
     _STAGES_CONFIG = json.load(_f)
 
 PIPELINE_STAGES = [
-    (s["script_name"], s["label"], s["key"]) for s in _STAGES_CONFIG["pipeline_stages"]
+    (s["script_name"], s["label"], s["key"], s.get("icon", "circle")) for s in _STAGES_CONFIG["pipeline_stages"]
 ]
 
 # Stage label → script_name for trigger buttons
@@ -243,7 +243,7 @@ def _compute_pipeline_state(project_id: int) -> list[dict]:
         pass  # Leave current_stage as None — all stages become not_started
 
     result = []
-    for script_name, label, icon_key in PIPELINE_STAGES:
+    for script_name, label, icon_key, icon_name in PIPELINE_STAGES:
         if script_name in done_stages:
             state = "done"
         elif current_stage == script_name:
@@ -262,12 +262,12 @@ def _compute_pipeline_state(project_id: int) -> list[dict]:
             state = "not_started"
 
         result.append({"label": label, "state": state, "icon_key": icon_key,
-                       "script_name": script_name})
+                       "icon_name": icon_name, "script_name": script_name})
 
     # Check if deploy is done → Live stage
     if "deploy.provision" in done_stages:
         result[-1] = {"label": "Live", "state": "done", "icon_key": "live",
-                      "script_name": "live"}
+                      "icon_name": "live", "script_name": "live"}
 
     return result
 
