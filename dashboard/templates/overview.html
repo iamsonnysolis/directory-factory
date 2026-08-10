@@ -131,10 +131,13 @@
         <input type="text" id="dir-domain" name="domain" placeholder="e.g. doggroomers.pages.dev">
       </div>
       <div class="form-group">
-        <label for="search-terms-input">Search terms (press Enter to add)</label>
+        <label for="search-terms-input">Search terms</label>
         <div id="search-terms-tags"></div>
-        <input type="text" id="search-terms-input" name="search_terms_input" placeholder="e.g. dog grooming brisbane">
-        <input type="hidden" id="search_terms" name="search_terms" value="[]">
+        <div style="display: flex; gap: 4px;">
+        <input type="text" id="search-terms-input" name="search_terms_input" placeholder="e.g. dog grooming brisbane" style="flex: 1;">
+        <button type="button" class="btn btn-sm btn-ghost" id="add-search-term" title="Add search term">+</button>
+        </div>
+        <input type="hidden" id="search_terms" name="search_terms" value="">
       </div>
       <div class="form-group">
         <label>Target metros</label>

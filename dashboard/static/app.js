@@ -64,23 +64,35 @@
     });
   }
 
-  // Tag input for search terms
+  // Tag input for search terms — mobile-friendly
   const tagInput = document.getElementById('search-terms-input');
   const tagContainer = document.getElementById('search-terms-tags');
+
+  function addTag() {
+    if (!tagInput || !tagContainer) return;
+    const tag = tagInput.value.trim();
+    if (!tag) return;
+    const span = document.createElement('span');
+    span.className = 'tag';
+    span.textContent = tag;
+    span.onclick = function() { span.remove(); updateHiddenInput(); };
+    tagContainer.appendChild(span);
+    tagInput.value = '';
+    updateHiddenInput();
+  }
+
   if (tagInput && tagContainer) {
     tagInput.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && this.value.trim()) {
         e.preventDefault();
-        const tag = this.value.trim();
-        const span = document.createElement('span');
-        span.className = 'tag';
-        span.textContent = tag;
-        span.onclick = function() { span.remove(); updateHiddenInput(); };
-        tagContainer.appendChild(span);
-        this.value = '';
-        updateHiddenInput();
+        addTag();
       }
     });
+    // Add button — works on mobile regardless of virtual keyboard behavior
+    const addBtn = document.getElementById('add-search-term');
+    if (addBtn) {
+      addBtn.addEventListener('click', addTag);
+    }
   }
 
   function updateHiddenInput() {
@@ -88,7 +100,8 @@
     if (!hidden) return;
     const tags = Array.from(tagContainer ? tagContainer.querySelectorAll('.tag') : [])
       .map(function(el) { return el.textContent; });
-    hidden.value = JSON.stringify(tags);
+    // Store tags as a simple comma-separated value (backend expects array from JSON body)
+    hidden.value = tags.join(',');
   }
 
   // ─── Create Directory form submit ───────────────────────────────────────
@@ -109,8 +122,9 @@
         niche_label: formData.get('niche_label'),
         field_tier: formData.get('field_tier'),
         search_step_km: parseInt(formData.get('search_step_km') || '10'),
-        search_terms: formData.get('search_terms'),
-        target_metros: JSON.stringify(metros),
+        search_terms: Array.from(tagContainer ? tagContainer.querySelectorAll('.tag') : [])
+          .map(function(el) { return el.textContent; }),
+        target_metros: metros,
         domain: formData.get('domain'),
       };
 

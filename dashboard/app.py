@@ -70,8 +70,8 @@ class DirectoryCreate(_BaseModel):
     niche_label: str = "local_service_business"
     field_tier: str = "Enterprise"
     search_step_km: int = 10
-    search_terms: list = []
-    target_metros: list = []
+    search_terms: list[str] = []
+    target_metros: list[str] = []
     domain: Optional[str] = None
 
 
@@ -625,6 +625,9 @@ async def api_create_directory(payload: DirectoryCreate):
         pid = cursor.lastrowid
         conn.commit()
 
+        if pid is None:
+            raise HTTPException(status_code=500, detail="Failed to create directory")
+
         for term in terms_list:
             conn.execute(
                 "INSERT INTO search_terms (project_id, term) VALUES (?, ?)",
@@ -635,9 +638,15 @@ async def api_create_directory(payload: DirectoryCreate):
         conn.close()
 
     # Save default site_config
-    if domain:
-        cfg = {"domain": domain, "site_name": name, "niche_label": niche_label or "local_service_business"}
-        _save_site_config(pid, cfg)
+    cfg = {
+        "site_name": name,
+        "tagline": "",
+        "niche_label": niche_label or "local_service_business",
+        "domain": domain or "",
+        "target_metros": metros_list,
+        "search_terms": terms_list,
+    }
+    _save_site_config(pid, cfg)
 
     return JSONResponse(content={
         "success": True, "directory_id": pid, "slug": slug,
