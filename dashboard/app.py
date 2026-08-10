@@ -202,16 +202,21 @@ def _get_directory_status(project_id: int) -> dict:
     return last_by_stage
 
 
+def _get_niche_icon(directory_name: str) -> str:
+    """Return the Lucide icon name for a directory's niche, or fallback."""
+    niche_map = _STAGES_CONFIG.get("niche_icons", {})
+    return niche_map.get(directory_name, niche_map.get("default", "store"))
+
+
 def _compute_pipeline_state(project_id: int) -> list[dict]:
-    """Compute the 6-dot pipeline stepper state for a directory.
+    """Compute the 7-step pipeline stepper state for a directory.
 
     Returns list of {label, state} where state is 'done', 'running', or 'not_started'.
     """
     stage_status = _get_directory_status(project_id)
 
     # Determine which stages are done vs running
-    stage_order = ["collection.collect", "cleaning.clean", "enrichment.enrich",
-                    "upload.d1", "deploy.provision"]
+    stage_order = [s[0] for s in PIPELINE_STAGES if s[0] not in ("idea", "live")]
     done_stages = set()
     current_stage = None
 
@@ -226,25 +231,21 @@ def _compute_pipeline_state(project_id: int) -> list[dict]:
             # Stage errored — mark as error and stop
             current_stage = script
             break
-        elif run is None and current_stage is None:
-            # Not started yet, and no running stage
-            pass
 
-    result = []
     # If no running/error stage was found, mark the first not-done stage as running (current)
     if current_stage is None and done_stages:
         for script in stage_order:
             if script not in done_stages:
                 current_stage = script
                 break
-    # If no running/error stage and no done stages — directory hasn't started, mark as Idea/not-started
-    # current_stage stays None, all stages will be "not_started" in the loop below
-    if current_stage is None and not done_stages:
-        pass  # Leave current_stage as None — all stages become not_started
 
     result = []
     for script_name, label, icon_key, icon_name in PIPELINE_STAGES:
-        if script_name in done_stages:
+        if script_name == "idea":
+            # Idea stage: done if at least one real stage is done OR if no stages started
+            # (it represents the directory concept being active)
+            state = "done" if done_stages or current_stage is not None else "not_started"
+        elif script_name in done_stages:
             state = "done"
         elif current_stage == script_name:
             # Check if it's actually running or errored
@@ -254,20 +255,14 @@ def _compute_pipeline_state(project_id: int) -> list[dict]:
             else:
                 # Mark this stage as "running" (current/active step)
                 state = "running"
-        elif current_stage is None and script_name not in done_stages:
-            state = "not_started"
+        elif script_name == "live":
+            # Live stage
+            state = "done" if "deploy.provision" in done_stages else "not_started"
         else:
-            # If a later stage is current_stage, earlier not-done stages should also be not_started
-            # unless they are done
             state = "not_started"
 
         result.append({"label": label, "state": state, "icon_key": icon_key,
                        "icon_name": icon_name, "script_name": script_name})
-
-    # Check if deploy is done → Live stage
-    if "deploy.provision" in done_stages:
-        result[-1] = {"label": "Live", "state": "done", "icon_key": "live",
-                      "icon_name": "live", "script_name": "live"}
 
     return result
 
@@ -368,6 +363,7 @@ async def overview(request: Request, view: str = "overview"):
             "id": pid,
             "name": proj["name"],
             "slug": proj["slug"],
+            "niche_icon": _get_niche_icon(proj["name"]),
             "place_count": counts["places_collected"],
             "current_stage": current_stage_label,
             "status_class": status_class,
@@ -512,6 +508,7 @@ async def api_directories(
             "country": proj["country"],
             "status": proj["status"] or "idle",
             "field_tier": proj["field_tier"] or "Essentials",
+            "niche_icon": _get_niche_icon(proj["name"]),
             "place_count": counts["places_collected"],
             "current_stage": current_stage_label,
             "status_class": status_class,

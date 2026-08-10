@@ -268,18 +268,54 @@ Directory-level status (Overview cards) uses the same pills, showing the
 └────────────────────────────────────────────────────────────────┘
 ```
 
-**Card contents (fixed set, per Q4):**
-- Directory name
-- Status pill (current stage)
-- 6-dot pipeline stepper: Collect·Clean·Enrich·Upload·Deploy·Live — filled
-  dots = done, one pulsing = running, empty = not yet reached
-- One headline metric (place count)
-- Last updated timestamp
-- One primary button, label changes by current stage:
-  `Start Collection` / `Run Cleaning` / `Run Enrichment` / `Upload to D1` /
-  `Deploy` / `View Live ↗`
-- No secondary menu/delete on the card itself — deletion lives on the
+**Card contents (fixed set, per Q4 — finalized against the confirmed mockup):**
+- Small rounded-square icon badge (light tinted background), top-left,
+  inline with the title — a **niche icon**, not a status icon. Status is
+  already fully conveyed by the pill and the stepper; a niche icon adds
+  information neither of those do (what kind of business this directory
+  is), which matters when scanning a grid of 11+ structurally-identical
+  cards. See the icon mapping table below.
+- Directory name, next to the icon
+- Status pill on its own row below the title (not squeezed onto the title
+  row, which collides with longer directory names) — sentence case
+  ("Deployed", "Collecting"), not all-caps
+- 7-dot pipeline stepper, **with labels under each dot**: Idea · Collect ·
+  Clean · Enrich · Upload · Deploy · Live. Every dot uses the same visual
+  language regardless of stage — plain filled circle with a checkmark
+  icon for done, pulsing for the current stage, empty outlined circle for
+  not-yet-reached. Never a different icon per stage (e.g. a magnifying
+  glass for Collect, a spinner for Clean) — that reads as inconsistent,
+  not informative. Connect the dots with a thin line; align each label
+  directly under its dot, evenly spaced.
+- Place count and last-updated on one row, each with a small icon (pin for
+  place count, calendar for updated) — not plain unadorned text
+- One button, **always labeled "View Project"** — not dynamic per stage.
+  A label that changes meaning per card was more confusing in practice
+  than useful; a single consistent action (go to the directory's detail
+  page) is clearer. Always the same accent color across every card
+  regardless of status — don't color-shift the button by stage.
+- No secondary/kebab menu on the card itself — deletion lives on the
   Directory Detail page only, to avoid an accidental click on a dense grid
+
+**Niche icon mapping** — Lucide icon per directory, keyed by niche label.
+Verify each name actually exists in the installed Lucide set before using
+it (some guesses below may not match exactly); fall back to a generic icon
+(e.g. `store` or `building-2`) for any niche not in this table, since more
+directories will be added later:
+
+| Niche | Suggested Lucide icon |
+|---|---|
+| Baby Sleep Consultant | `baby` |
+| Mobile Auto Electricians | `zap` |
+| Laundromat | `shirt` |
+| Pest Control | `bug` |
+| Mobile Vet | `paw-print` |
+| Caravan Repairs | `wrench` |
+| Mobile Locksmiths | `key` |
+| Mobile Windscreen Repair | `car` |
+| Car Detailers | `sparkles` |
+| Mobile Dog Groomers | `dog` |
+| Mobile Mechanics | `wrench` |
 
 **Empty state:** if there are zero directories, show a single centered
 "+ New Directory" call to action instead of an empty grid.

@@ -72,7 +72,14 @@
        data-status-class="{{ d.status_class }}"
        data-current-stage="{{ d.current_stage }}">
     <div class="project-card-header">
-      <div>
+      <div class="card-title-row">
+        <div class="niche-badge">
+          {% if d.niche_icon %}
+            {% include 'icons/' + d.niche_icon + '.svg' %}
+          {% else %}
+            {% include 'icons/store.svg' %}
+          {% endif %}
+        </div>
         <div class="project-card-name">
           <a href="/directories/{{ d.id }}" class="dir-link">{{ d.name }}</a>
         </div>
@@ -91,11 +98,11 @@
             {% if s.state == 'done' %}stepper-dot-done{% elif s.state == 'running' %}stepper-dot-running{% elif s.state == 'error' %}stepper-dot-error{% else %}stepper-dot-not-started{% endif %}"
             title="{{ s.label }}">
             {% if s.state == 'done' %}
-              <span class="stepper-check">✓</span>
+              {% include 'icons/check.svg' %}
             {% elif s.state == 'error' %}
-              <span class="stepper-check">✗</span>
+              {% include 'icons/x.svg' %}
             {% else %}
-              {% include 'icons/' + s.icon_name + '.svg' %}
+              <span class="stepper-pulse-dot"></span>
             {% endif %}
           </div>
         {% endfor %}
@@ -111,8 +118,15 @@
     </div>
 
     <div class="project-meta">
-      <span class="count">{{ d.place_count }} places</span>
-      <span class="updated">Updated {{ (d.updated_at or d.created_at).split('T')[0] if (d.updated_at or d.created_at) else '—' }}</span>
+      <span class="meta-item">
+        {% include 'icons/map-pin.svg' %}
+        {{ d.place_count }} places
+      </span>
+      <span class="meta-divider"></span>
+      <span class="meta-item">
+        {% include 'icons/calendar.svg' %}
+        Updated {{ (d.updated_at or d.created_at).split('T')[0] if (d.updated_at or d.created_at) else '—' }}
+      </span>
     </div>
 
     <div class="project-card-footer">
