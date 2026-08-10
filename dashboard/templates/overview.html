@@ -83,13 +83,25 @@
       </span>
     </div>
 
-    <!-- 6-dot pipeline stepper -->
-    <div class="pipeline-stepper" data-directory-id="{{ d.id }}">
-      {% for s in d.stages %}
-        <div class="stepper-dot
-          {% if s.state == 'done' %}stepper-dot-done{% elif s.state == 'running' %}stepper-dot-running{% elif s.state == 'error' %}stepper-dot-error{% else %}stepper-dot-not-started{% endif %}"
-          title="{{ s.label }}"></div>
-      {% endfor %}
+    <div class="stepper-with-titles">
+      <div class="stepper-line"></div>
+      <div class="stepper-circles">
+        {% for s in d.stages %}
+          <div class="stepper-dot
+            {% if s.state == 'done' %}stepper-dot-done{% elif s.state == 'running' %}stepper-dot-running{% elif s.state == 'error' %}stepper-dot-error{% else %}stepper-dot-not-started{% endif %}
+            " title="{{ s.label }}">
+            {% if s.state == 'done' %}<span class="stepper-check">✓</span>{% elif s.state == 'running' %}<span class="stepper-indicator"></span>{% endif %}
+          </div>
+        {% endfor %}
+      </div>
+      <div class="stepper-titles">
+        {% for s in d.stages %}
+          <span class="stepper-title
+            {% if s.state == 'running' %}stepper-title-current{% endif %}
+            {% if s.state == 'error' %}stepper-title-error{% endif %}"
+          >{{ s.label }}</span>
+        {% endfor %}
+      </div>
     </div>
 
     <div class="project-meta">

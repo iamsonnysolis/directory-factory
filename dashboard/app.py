@@ -233,6 +233,18 @@ def _compute_pipeline_state(project_id: int) -> list[dict]:
             pass
 
     result = []
+    # If no running/error stage was found, mark the first not-done stage as running (current)
+    if current_stage is None and done_stages:
+        for script in stage_order:
+            if script not in done_stages:
+                current_stage = script
+                break
+    # If no running/error stage and no done stages — directory hasn't started, mark as Idea/not-started
+    # current_stage stays None, all stages will be "not_started" in the loop below
+    if current_stage is None and not done_stages:
+        pass  # Leave current_stage as None — all stages become not_started
+
+    result = []
     for script_name, label, icon_key in PIPELINE_STAGES:
         if script_name in done_stages:
             state = "done"
@@ -242,11 +254,13 @@ def _compute_pipeline_state(project_id: int) -> list[dict]:
             if run:
                 state = run["status"]
             else:
-                state = "not_started"
+                # Mark this stage as "running" (current/active step)
+                state = "running"
         elif current_stage is None and script_name not in done_stages:
             state = "not_started"
         else:
-            # If a previous stage is current_stage (running/error), later stages are not_started
+            # If a later stage is current_stage, earlier not-done stages should also be not_started
+            # unless they are done
             state = "not_started"
 
         result.append({"label": label, "state": state, "icon_key": icon_key,
@@ -352,18 +366,6 @@ async def overview(request: Request, view: str = "overview"):
         if status_class == "done" and current_stage_label == "Live":
             live_count += 1
 
-        # Stage → action button label (spec Q: Start Collection / Run Cleaning / Run Enrichment / Upload to D1 / Deploy / View Live)
-        action_labels = {
-            "Idea": "Start Collection",
-            "Collecting": "Run Collection",
-            "Cleaning": "Run Cleaning",
-            "Enriching": "Run Enrichment",
-            "Uploading": "Upload to D1",
-            "Deploying": "Deploy",
-            "Live": "View Live ↗",
-            "Error": "Re-run",
-        }
-
         card = {
             "id": pid,
             "name": proj["name"],
@@ -374,7 +376,7 @@ async def overview(request: Request, view: str = "overview"):
             "stages": stages,
             "created_at": proj["created_at"] or "",
             "updated_at": proj["updated_at"] or "",
-            "action_button_label": action_labels.get(current_stage_label, "Start Collection"),
+            "action_button_label": "View Project",
         }
         cards.append(card)
 
@@ -518,16 +520,7 @@ async def api_directories(
             "stages": stages,
             "created_at": proj["created_at"] or "",
             "updated_at": proj["updated_at"] or "",
-            "action_button_label": {
-                "Idea": "Start Collection",
-                "Collecting": "Run Collection",
-                "Cleaning": "Run Cleaning",
-                "Enriching": "Run Enrichment",
-                "Uploading": "Upload to D1",
-                "Deploying": "Deploy",
-                "Live": "View Live ↗",
-                "Error": "Re-run",
-            }.get(current_stage_label, "Start Collection"),
+            "action_button_label": "View Project",
         })
 
     # Apply filters

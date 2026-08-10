@@ -234,9 +234,7 @@ body {
 }
 
 .dir-link::after {
-  content: "↗";
-  font-size: 14px;
-  opacity: 0.4;
+  content: '';
 }
 
 .status-pill {
@@ -256,11 +254,93 @@ body {
 .status-done { background: #d1fae5; color: #065f46; }  /* teal */
 .status-error { background: #fee2e2; color: #991b1b; }
 
-.pipeline-stepper {
+/* Pipeline Stepper with titles — grey line, circles, step titles */
+.stepper-with-titles {
+  margin: 16px 0;
+  position: relative;
+}
+
+.stepper-line {
+  position: absolute;
+  top: 12px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--color-border);
+  z-index: 0;
+}
+
+.stepper-circles {
   display: flex;
+  justify-content: space-between;
   align-items: center;
   gap: 4px;
-  margin: 12px 0;
+  margin-top: 8px;
+  position: relative;
+  z-index: 1;
+}
+
+.stepper-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.stepper-dot-done {
+  background: var(--color-done);
+  color: white;
+}
+
+.stepper-dot-running {
+  background: var(--color-running);
+  color: white;
+  animation: pulse-bg 1.5s infinite;
+}
+
+.stepper-dot-error {
+  background: var(--color-error);
+  color: white;
+}
+
+.stepper-dot-not-started {
+  background: var(--color-not-started);
+  color: white;
+}
+
+.stepper-check {
+  display: block;
+}
+
+/* Stepper titles */
+.stepper-titles {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.stepper-title {
+  flex: 1;
+  text-align: center;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.stepper-title-current {
+  color: var(--color-running);
+  font-weight: 600;
+}
+
+.stepper-title-error {
+  color: var(--color-error);
+  font-weight: 600;
 }
 
 /* Stat Tiles */
