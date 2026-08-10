@@ -518,6 +518,16 @@ async def api_directories(
             "stages": stages,
             "created_at": proj["created_at"] or "",
             "updated_at": proj["updated_at"] or "",
+            "action_button_label": {
+                "Idea": "Start Collection",
+                "Collecting": "Run Collection",
+                "Cleaning": "Run Cleaning",
+                "Enriching": "Run Enrichment",
+                "Uploading": "Upload to D1",
+                "Deploying": "Deploy",
+                "Live": "View Live ↗",
+                "Error": "Re-run",
+            }.get(current_stage_label, "Start Collection"),
         })
 
     # Apply filters

@@ -73,7 +73,9 @@
        data-current-stage="{{ d.current_stage }}">
     <div class="project-card-header">
       <div>
-        <div class="project-card-name">{{ d.name }}</div>
+        <div class="project-card-name">
+          <a href="/directories/{{ d.id }}" class="dir-link">{{ d.name }}</a>
+        </div>
       </div>
       <span class="status-pill status-{{ d.status_class }}">
         {% if d.status_class == 'running' %}<span class="pulse-dot"></span>{% endif %}
