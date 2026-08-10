@@ -223,18 +223,11 @@ body {
 .dir-link {
   color: var(--color-text);
   text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
 }
 
 .dir-link:hover {
   color: var(--color-teal);
   text-decoration: underline;
-}
-
-.dir-link::after {
-  content: '';
 }
 
 .status-pill {

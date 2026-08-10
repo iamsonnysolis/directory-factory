@@ -27,7 +27,26 @@ _DASHBOARD_DIR = _PROJECT_ROOT / "dashboard"
 _COLLECTION_DB = _PROJECT_ROOT / "data" / "collector.db"
 _RUNS_DB = _PROJECT_ROOT / "runs.db"
 _ENV_PATH = _PROJECT_ROOT / ".env"
-_SITE_CONFIG_DB = _PROJECT_ROOT / "runs.db"  # site_config stored in runs.db for v1
+_SITE_CONFIG_DB = _RUNS_DB  # site_config stored in runs.db for v1
+_STAGES_CONFIG_PATH = _PROJECT_ROOT / "pipeline-stages.json"
+
+# ── Load pipeline stage definitions from config ──────────────────────────────
+with open(_STAGES_CONFIG_PATH, "r") as _f:
+    _STAGES_CONFIG = json.load(_f)
+
+PIPELINE_STAGES = [
+    (s["script_name"], s["label"], s["key"]) for s in _STAGES_CONFIG["pipeline_stages"]
+]
+
+# Stage label → script_name for trigger buttons
+STAGE_SCRIPTS = {
+    s["label"]: s["script_name"] for s in _STAGES_CONFIG["pipeline_stages"]
+}
+
+# Stage label → action button label
+STAGE_ACTION_BUTTONS = {
+    s["label"]: s["action_button"] for s in _STAGES_CONFIG["pipeline_stages"]
+}
 
 for p in [_PROJECT_ROOT, _PROJECT_ROOT / "scripts", _PROJECT_ROOT / "runner"]:
     if str(p) not in sys.path:
@@ -158,27 +177,6 @@ def _write_env(env: dict):
         lines.append(f"{k}={v}")
     _ENV_PATH.write_text("\n".join(lines) + "\n")
 
-
-# ─── Pipeline stage helpers ──────────────────────────────────────────────────
-# 6 stages per the spec's pipeline stepper (Collect·Clean·Enrich·Upload·Deploy·Live)
-# Stage label → (script_name, display_name, state_key)
-PIPELINE_STAGES = [
-    ("collection.collect", "Collecting", "collecting"),
-    ("cleaning.clean", "Cleaning", "cleaning"),
-    ("enrichment.enrich", "Enriching", "enriching"),
-    ("upload.d1", "Uploading", "uploading"),
-    ("deploy.provision", "Deploying", "deploying"),
-    ("live", "Live", "live"),
-]
-
-# Stage label → script_name for trigger buttons
-STAGE_SCRIPTS = {
-    "Collecting": "collection.collect",
-    "Cleaning": "cleaning.clean",
-    "Enriching": "enrichment.enrich",
-    "Uploading": "upload.d1",
-    "Deploying": "deploy.provision",
-}
 
 
 def _get_directory_status(project_id: int) -> dict:

@@ -1,0 +1,68 @@
+{
+  "pipeline_stages": [
+    {
+      "key": "collecting",
+      "label": "Collecting",
+      "verb": "collect",
+      "script_name": "collection.collect",
+      "action_button": "Start Collection",
+      "description": "Gather places from source APIs using search terms and target metros"
+    },
+    {
+      "key": "cleaning",
+      "label": "Cleaning",
+      "verb": "clean",
+      "script_name": "cleaning.clean",
+      "action_button": "Run Cleaning",
+      "description": "Deduplicate and normalize collected place records"
+    },
+    {
+      "key": "enriching",
+      "label": "Enriching",
+      "verb": "enrich",
+      "script_name": "enrichment.enrich",
+      "action_button": "Run Enrichment",
+      "description": "Generate EEAT content (about, faq, tips, meta_title, meta_description, seo_keywords)"
+    },
+    {
+      "key": "uploading",
+      "label": "Uploading",
+      "verb": "upload",
+      "script_name": "upload.d1",
+      "action_button": "Upload to D1",
+      "description": "Upload cleaned and enriched data to Cloudflare D1 in FK-safe order"
+    },
+    {
+      "key": "deploying",
+      "label": "Deploying",
+      "verb": "deploy",
+      "script_name": "deploy.provision",
+      "action_button": "Deploy",
+      "description": "Provision Cloudflare Workers site with the white-labeled Astro template"
+    },
+    {
+      "key": "live",
+      "label": "Live",
+      "verb": "go live",
+      "script_name": "live",
+      "action_button": "View Live Site",
+      "description": "Site is deployed and live with Cloudflare Analytics"
+    }
+  ],
+  "status_pills": {
+    "not_started": { "color": "grey", "css_class": "not-started" },
+    "running": { "color": "blue", "css_class": "running", "pulse": true },
+    "done": { "color": "teal", "css_class": "done" },
+    "error": { "color": "red", "css_class": "error" }
+  },
+  "directory_level_states": {
+    "Idea": "not-started",
+    "Collecting": "running",
+    "Cleaning": "running",
+    "Enriching": "running",
+    "Uploading": "running",
+    "Deploying": "running",
+    "Live": "done",
+    "Error": "error"
+  }
+}
