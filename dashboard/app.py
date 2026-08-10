@@ -268,28 +268,27 @@ def _current_stage_label(project_id: int) -> tuple[str, str]:
     status_class matches CSS: not-started / running / done / error
     """
     stages = _compute_pipeline_state(project_id)
+
+    # First pass: check for any running or error stage
     for s in stages:
         if s["state"] == "running":
             return s["label"], "running"
         elif s["state"] == "error":
             return "Error", "error"
-        elif s["state"] == "not_started":
-            prior_stages = stages[:stages.index(s)]
-            if not any(p["state"] == "done" for p in prior_stages):
-                return "Idea", "not-started"
-            else:
-                # A prior stage is done but this one hasn't started → show the
-                # last completed stage's label with "done" status (teal)
-                last_done = None
-                for p in reversed(prior_stages):
-                    if p["state"] == "done":
-                        last_done = p
-                        break
-                if last_done:
-                    return last_done["label"], "done"
-                else:
-                    return s["label"], "not-started"
-    return "Live", "done"
+
+    # No running or error stage — find the last completed stage
+    last_done = None
+    for s in stages:
+        if s["state"] == "done":
+            last_done = s
+
+    if last_done:
+        # At least one stage is done — show the last completed stage with done status
+        # (this handles pipeline gaps where a later stage ran without an earlier one)
+        return last_done["label"], "done"
+
+    # No stages done at all — directory hasn't started
+    return "Idea", "not-started"
 
 
 def _directory_counts(project_id: int) -> dict:

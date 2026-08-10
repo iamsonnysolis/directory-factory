@@ -170,6 +170,12 @@ body {
   font-size: 13px;
 }
 
+.card-action-btn {
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 14px;
+}
+
 .btn-ghost {
   background: transparent;
   border-color: var(--color-border);
