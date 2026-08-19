@@ -7,7 +7,9 @@ in-page interactivity (polling, form previews, log expansion).
 Binds to 127.0.0.1 only — no authentication (see Dashboard-UX-Decisions.md Q2).
 """
 
+import asyncio
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -54,6 +56,8 @@ for p in [_PROJECT_ROOT, _PROJECT_ROOT / "scripts", _PROJECT_ROOT / "runner"]:
 
 from runner.run import run_script, SCRIPT_MAP, init_runs_db  # noqa: E402
 
+logger = logging.getLogger("dashboard")  # noqa: E402
+
 # ── Jinja2 setup ───────────────────────────────────────────────────────────
 _templates = Environment(
     loader=FileSystemLoader(str(_DASHBOARD_DIR / "templates")),
@@ -74,12 +78,107 @@ def _format_int(value):
 
 _templates.filters["format_int"] = _format_int
 
+# ─── Jinja2 helper functions for templates ────────────────────────────────────
+def _stage_state(stages, script_name):
+    """Find the state of a stage by script_name."""
+    for s in stages:
+        if s["script_name"] == script_name:
+            return s["state"]
+    return "not_started"
+
+def _stage_pill_label(state, label):
+    """Map pipeline state to human-readable pill text."""
+    return {"done": "Done", "running": "Running", "not_started": "Not started", "error": "Error"}.get(state, label)
+
+def _done_count(stages):
+    """Count stages that are done."""
+    return sum(1 for s in stages if s["state"] == "done")
+
+def _pipeline_stages_for_detail():
+    """Return pipeline stages excluding idea/live for the stage cards."""
+    return [s for s in _STAGES_CONFIG["pipeline_stages"] if s["key"] not in ("idea", "live")]
+
+def _pipeline_stages_label(script_name):
+    """Map a script_name to its stage label."""
+    for s in _STAGES_CONFIG["pipeline_stages"]:
+        if s["script_name"] == script_name:
+            return s["label"]
+    return script_name.replace(".", " ").title()
+
+def _pipeline_icon_for(script_name):
+    """Map a script_name to its icon name for the detail page stage cards."""
+    icon_map = {
+        "collection.collect": "map-pin",
+        "cleaning.clean": "sparkles",
+        "enrichment.enrich": "shirt",
+        "upload.d1": "cloud",
+        "deploy.provision": "rocket",
+        "idea": "lightbulb",
+        "live": "globe",
+    }
+    return icon_map.get(script_name, "store")
+
+def _stage_short_label(stage_key: str) -> str:
+    """Map a stage key to the short label used in the Overview card stepper."""
+    short_map = {
+        "idea": "Idea",
+        "collecting": "Collect",
+        "cleaning": "Clean",
+        "enriching": "Enrich",
+        "uploading": "Upload",
+        "deploying": "Deploy",
+        "live": "Live",
+    }
+    return short_map.get(stage_key, stage_key)
+
+def _stage_progress_pct(counts_json, total_counts, stage_key):
+    """Compute progress percentage for a stage card."""
+    if not counts_json:
+        return 0
+    if stage_key == "collecting":
+        done = counts_json.get("places", 0)
+    elif stage_key == "cleaning":
+        done = counts_json.get("cleaned", 0)
+    elif stage_key == "enriching":
+        done = counts_json.get("ai_generated", 0) or counts_json.get("feature_rows", 0)
+    else:
+        done = 0
+    total = total_counts.get("places_collected", 0) if total_counts else 0
+    if total > 0:
+        return round(min(done / total * 100, 100))
+    return 0
+
+def _stage_last_run(directory_id, script_name):
+    """Get the most recent run for a stage (stub — returns None by default)."""
+    return None
+
+
+def _last_traceback_line(error: str) -> str:
+    """Extract the last line of a traceback — the actual ExceptionType: message line."""
+    if not error:
+        return ""
+    lines = error.strip().split("\n")
+    # Return the last non-empty line (the exception summary, not "Traceback...")
+    return lines[-1].strip() if lines else ""
+
+_templates.globals["_stage_state"] = _stage_state
+_templates.globals["_stage_pill_label"] = _stage_pill_label
+_templates.globals["_done_count"] = _done_count
+_templates.globals["_pipeline_stages_for_detail"] = _pipeline_stages_for_detail
+_templates.globals["_pipeline_stages_label"] = _pipeline_stages_label
+_templates.globals["_pipeline_icon_for"] = _pipeline_icon_for
+_templates.globals["_stage_short_label"] = _stage_short_label
+_templates.globals["_stage_progress_pct"] = _stage_progress_pct
+_templates.globals["_stage_last_run"] = _stage_last_run
+_templates.globals["_last_traceback_line"] = _last_traceback_line
+_templates.globals["_pipeline_stages_label"] = _pipeline_stages_label
+
 app = FastAPI(title="Directory Factory Dashboard", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(_DASHBOARD_DIR / "static")), name="static")
 
 
 # ── Pydantic models for JSON body parsing ────────────────────────────────────
-from pydantic import BaseModel as _BaseModel, Field as _Field, ConfigDict
+from pydantic import BaseModel as _BaseModel, Field as _Field, ConfigDict, field_validator
 
 
 class DirectoryCreate(_BaseModel):
@@ -92,6 +191,13 @@ class DirectoryCreate(_BaseModel):
     search_terms: list[str] = []
     target_metros: list[str] = []
     domain: Optional[str] = None
+
+    @field_validator("search_terms")
+    @classmethod
+    def require_search_terms(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError("at least one search term is required")
+        return v
 
 
 class RunScriptRequest(_BaseModel):
@@ -203,9 +309,27 @@ def _get_directory_status(project_id: int) -> dict:
 
 
 def _get_niche_icon(directory_name: str) -> str:
-    """Return the Lucide icon name for a directory's niche, or fallback."""
+    """Return the Lucide icon name for a directory's niche, or fallback.
+
+    Matches by exact name first, then falls back to substring matching
+    against the keys in the niche_icons map (so 'Mobile Dog Grooming'
+    still matches the 'Mobile Dog Groomers' entry). Uses 'store' as the
+    final fallback for any niche not in the table.
+    """
     niche_map = _STAGES_CONFIG.get("niche_icons", {})
-    return niche_map.get(directory_name, niche_map.get("default", "store"))
+    if not niche_map:
+        return "store"
+    # Exact match first
+    if directory_name in niche_map:
+        return niche_map[directory_name]
+    # Substring match: check if the directory name contains a known niche keyword
+    name_lower = directory_name.lower()
+    for niche_key, icon_name in niche_map.items():
+        if niche_key == "default":
+            continue
+        if niche_key.lower() in name_lower:
+            return icon_name
+    return niche_map.get("default", "store")
 
 
 def _compute_pipeline_state(project_id: int) -> list[dict]:
@@ -232,8 +356,10 @@ def _compute_pipeline_state(project_id: int) -> list[dict]:
             current_stage = script
             break
 
-    # If no running/error stage was found, mark the first not-done stage as running (current)
-    if current_stage is None and done_stages:
+    # If no running/error stage was found, determine the current stage.
+    # Idea is always "done" (directory exists), so if no real stages are done,
+    # the first real stage (Collect) is the current/running step.
+    if current_stage is None:
         for script in stage_order:
             if script not in done_stages:
                 current_stage = script
@@ -242,9 +368,10 @@ def _compute_pipeline_state(project_id: int) -> list[dict]:
     result = []
     for script_name, label, icon_key, icon_name in PIPELINE_STAGES:
         if script_name == "idea":
-            # Idea stage: done if at least one real stage is done OR if no stages started
-            # (it represents the directory concept being active)
-            state = "done" if done_stages or current_stage is not None else "not_started"
+            # Idea stage: done whenever the directory exists in collector.db
+            # (the directory being defined = the Idea being realized),
+            # regardless of whether any pipeline runs have happened yet.
+            state = "done"
         elif script_name in done_stages:
             state = "done"
         elif current_stage == script_name:
@@ -317,15 +444,44 @@ def _directory_counts(project_id: int) -> dict:
     cleaned_file = base / "cleaned" / "businesses.jsonl"
     if cleaned_file.exists():
         counts["places_cleaned"] = sum(1 for _ in open(cleaned_file))
-
     enriched_file = base / "enriched" / "business_features.jsonl"
     if enriched_file.exists():
         counts["features_enriched"] = sum(1 for _ in open(enriched_file))
 
     return counts
 
+def _count_enriched_records(project_id: int) -> int:
+    """Count enriched business records from the enriched directory."""
+    base = _PROJECT_ROOT / "data" / str(project_id)
+    businesses_file = base / "enriched" / "businesses.jsonl"
+    if businesses_file.exists():
+        try:
+            return sum(1 for line in open(businesses_file) if line.strip())
+        except Exception:
+            pass
+    return 0
 
-# ─── Page routes ────────────────────────────────────────────────────────────
+def _avg_quality_score(project_id: int) -> float:
+    """Compute the average quality_score from enriched businesses.jsonl."""
+    base = _PROJECT_ROOT / "data" / str(project_id)
+    businesses_file = base / "enriched" / "businesses.jsonl"
+    if not businesses_file.exists():
+        return 0.0
+    scores = []
+    try:
+        for line in open(businesses_file):
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            qs = obj.get("quality_score")
+            if qs is not None:
+                scores.append(float(qs))
+    except Exception:
+        pass
+    return round(sum(scores) / len(scores), 1) if scores else 0.0
+
+# ─── Page routes ─────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 async def overview(request: Request, view: str = "overview"):
@@ -397,7 +553,6 @@ async def overview(request: Request, view: str = "overview"):
         request=request,
         directories=cards,
         view=view,
-        search_param=request.query_params.get("search", ""),
         stat_total_dirs=stat_total_dirs,
         stat_places_collected=stat_places_collected,
         stat_live_sites=stat_live_sites,
@@ -427,25 +582,75 @@ async def directory_detail(request: Request, directory_id: int):
     counts = _directory_counts(directory_id)
     site_config = _get_site_config(directory_id)
 
-    # Get recent runs for the Runs tab
+    # Get active run (if any script is currently running for this directory)
     conn = _connect_runs()
     conn.row_factory = sqlite3.Row
+    active_run = conn.execute(
+        "SELECT script_name, started_at, counts_json "
+        "FROM runs WHERE project_id = ? AND status = 'running' "
+        "ORDER BY started_at DESC LIMIT 1",
+        (directory_id,),
+    ).fetchone()
+
+    # Get recent runs for the Logs tab — merge script runs (runs.db) with collection job logs (collector.db)
     recent_runs = conn.execute(
-        "SELECT id, script_name, status, summary, started_at, finished_at, error "
+        "SELECT id, script_name, status, summary, started_at, finished_at, error, stdout, stderr "
         "FROM runs WHERE project_id = ? ORDER BY started_at DESC LIMIT 20",
         (directory_id,),
     ).fetchall()
+
+    # Also fetch collection job logs from collector.db (e.g. 429 warnings, job errors)
+    recent_collection_logs = []
+    try:
+        conn_collector = _connect_collector()
+        conn_collector.row_factory = sqlite3.Row
+        recent_collection_logs = conn_collector.execute(
+            "SELECT id, level, message, created_at FROM logs WHERE project_id = ? ORDER BY created_at DESC LIMIT 20",
+            (directory_id,),
+        ).fetchall()
+        conn_collector.close()
+    except Exception:
+        pass
+
+    # Get last run counts for each stage (for progress bars)
+    stage_counts = {}
+    for row in conn.execute(
+        "SELECT script_name, status, counts_json, started_at, finished_at "
+        "FROM runs WHERE project_id = ? ORDER BY started_at DESC",
+        (directory_id,),
+    ).fetchall():
+        script = row["script_name"]
+        if script not in stage_counts:
+            try:
+                stage_counts[script] = json.loads(row["counts_json"]) if row["counts_json"] else {}
+            except (json.JSONDecodeError, TypeError):
+                stage_counts[script] = {}
     conn.close()
+
+    # Compute enrichment counts
+    enriched_count = _count_enriched_records(directory_id)
+    quality_score_avg = _avg_quality_score(directory_id)
+
+    # Determine current stage info for the banner
+    current_stage_label, status_class = _current_stage_label(directory_id)
 
     tmpl = _templates.get_template("directory_detail.html")
     html = tmpl.render(
         request=request,
-        project=dict(proj),
+        project={**dict(proj), "niche_icon": _get_niche_icon(proj["name"])},
         directory_id=directory_id,
         stages=stages,
         counts=counts,
         site_config=site_config,
+        niche_label=site_config.get("niche_label", proj["niche_label"] if proj and "niche_label" in proj.keys() else ""),
         recent_runs=[dict(r) for r in recent_runs],
+        recent_collection_logs=[dict(r) for r in recent_collection_logs],
+        active_run=dict(active_run) if active_run else None,
+        stage_counts=stage_counts,
+        enriched_count=enriched_count,
+        quality_score_avg=quality_score_avg,
+        current_stage_label=current_stage_label,
+        status_class=status_class,
         script_map=SCRIPT_MAP,
         PIPELINE_STAGES=PIPELINE_STAGES,
     )
@@ -714,8 +919,11 @@ async def api_delete_directory(directory_id: int):
 async def api_run_script(directory_id: int, body: RunScriptRequest):
     """Trigger a standardized script via the Phase 3 runner.
 
-    Body: { "script_name": "enrichment.enrich", "params": {"skip_ai": true} }
-    Returns immediately with the run result (scripts are synchronous in this v1).
+    Body: { "script_name": "collection.collect", "params": {} }
+
+    Runs the script as a background task so the HTTP response returns
+    immediately while collection continues server-side. The client
+    polls /api/directories/{id} for status updates.
     """
     script_name = body.script_name
     params = body.params
@@ -739,8 +947,37 @@ async def api_run_script(directory_id: int, body: RunScriptRequest):
     if not proj:
         raise HTTPException(status_code=404, detail="Directory not found")
 
-    result = run_script(script_name, directory_id, params)
-    return JSONResponse(content=result)
+    # Synchronous validation: check for search terms before starting collection
+    if script_name == "collection.collect":
+        try:
+            conn2 = _connect_collector()
+            term_count = conn2.execute(
+                "SELECT COUNT(*) FROM search_terms WHERE project_id = ?", (directory_id,)
+            ).fetchone()[0]
+            conn2.close()
+            if term_count == 0:
+                return JSONResponse(content={
+                    "status": "error",
+                    "script_name": script_name,
+                    "error": "No search terms configured for this directory. Add search terms in the Config tab before running collection.",
+                })
+        except sqlite3.OperationalError:
+            pass  # search_terms table may not exist yet
+
+    # Run script in background so the HTTP response returns immediately
+    async def _run_background():
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: run_script(script_name, directory_id, params))
+        except Exception as e:
+            logger.error(f"Background run failed for {script_name} on project {directory_id}: {e}")
+
+    asyncio.create_task(_run_background())
+    return JSONResponse(content={
+        "status": "started",
+        "script_name": script_name,
+        "message": f"{script_name} started for directory {directory_id}",
+    })
 
 
 @app.get("/api/directories/{directory_id}/places")
@@ -776,6 +1013,187 @@ async def api_places(directory_id: int, search: str = "",
 
     return JSONResponse(content={
         "places": [dict(r) for r in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    })
+
+
+@app.get("/api/directories/{directory_id}/collection-progress")
+async def api_collection_progress(directory_id: int):
+    """Collection progress endpoint — returns job counts for real-time progress feedback.
+
+    Returns:
+        - total_jobs: total number of jobs for this project
+    - pending: jobs waiting to be processed
+    - running: jobs currently being processed
+    - complete: jobs that finished successfully
+    - failed: jobs that failed after all retries
+    - places_collected: total places in collector.db for this project
+    - project_status: current status from projects table (idle/running/complete)
+    - last_log: most recent log entry message
+    """
+    conn = _connect_collector()
+    conn.row_factory = sqlite3.Row
+
+    progress = {
+        "total_jobs": 0,
+        "pending": 0,
+        "running": 0,
+        "complete": 0,
+        "failed": 0,
+        "places_collected": 0,
+        "project_status": "idle",
+        "last_log": None,
+    }
+
+    try:
+        # Job counts by status
+        progress["total_jobs"] = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE project_id = ?", (directory_id,)
+        ).fetchone()[0]
+        progress["pending"] = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE project_id = ? AND status = 'pending'", (directory_id,)
+        ).fetchone()[0]
+        progress["running"] = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE project_id = ? AND status = 'running'", (directory_id,)
+        ).fetchone()[0]
+        progress["complete"] = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE project_id = ? AND status = 'complete'", (directory_id,)
+        ).fetchone()[0]
+        progress["failed"] = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE project_id = ? AND status = 'failed'", (directory_id,)
+        ).fetchone()[0]
+
+        # Places collected
+        progress["places_collected"] = conn.execute(
+            "SELECT COUNT(*) FROM places WHERE project_id = ?", (directory_id,)
+        ).fetchone()[0]
+
+        # Add percentage for frontend progress display
+        if progress["total_jobs"] > 0:
+            progress["percentage"] = round(
+                progress["complete"] / progress["total_jobs"] * 100
+            )
+        else:
+            progress["percentage"] = 0
+
+        # Project status
+        proj = conn.execute(
+            "SELECT status FROM projects WHERE id = ?", (directory_id,)
+        ).fetchone()
+        if proj:
+            progress["project_status"] = proj["status"] or "idle"
+
+        # Most recent log entry
+        log_row = conn.execute(
+            "SELECT level, message, created_at FROM logs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1",
+            (directory_id,)
+        ).fetchone()
+        if log_row:
+            progress["last_log"] = dict(log_row)
+    except sqlite3.OperationalError:
+        pass  # Tables may not exist yet
+
+    conn.close()
+    return JSONResponse(content=progress)
+
+
+@app.get("/api/directories/{directory_id}/cleaned")
+async def api_cleaned_data(directory_id: int, search: str = "",
+                            min_completeness: int = 0, limit: int = 100, offset: int = 0):
+    """Cleaned data endpoint — read businesses.jsonl from the cleaned data directory.
+
+    Returns paginated, searchable records from the cleaning stage output.
+    """
+    base = _PROJECT_ROOT / "data" / str(directory_id)
+    cleaned_file = base / "cleaned" / "businesses.jsonl"
+
+    if not cleaned_file.exists():
+        return JSONResponse(content={
+            "records": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+        })
+
+    records = []
+    try:
+        for line in open(cleaned_file):
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            # Apply search filter
+            if search:
+                searchable = (obj.get("name", "") + " " + obj.get("address", "") + " " + obj.get("primary_type", ""))
+                if search.lower() not in searchable.lower():
+                    continue
+            # Apply completeness filter
+            if min_completeness:
+                cs = obj.get("data_completeness_score", 0) or 0
+                if cs < min_completeness:
+                    continue
+            records.append(obj)
+    except Exception:
+        pass
+
+    total = len(records)
+    records = records[offset:offset + limit]
+
+    return JSONResponse(content={
+        "records": records,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    })
+
+
+@app.get("/api/directories/{directory_id}/enriched")
+async def api_enriched_data(directory_id: int, search: str = "",
+                             min_quality: int = 0, limit: int = 100, offset: int = 0):
+    """Enriched data endpoint — read businesses.jsonl from the enriched data directory.
+
+    Returns paginated, searchable records from the enrichment stage output,
+    including quality scores and AI-generated fields.
+    """
+    base = _PROJECT_ROOT / "data" / str(directory_id)
+    enriched_file = base / "enriched" / "businesses.jsonl"
+
+    if not enriched_file.exists():
+        return JSONResponse(content={
+            "records": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+        })
+
+    records = []
+    try:
+        for line in open(enriched_file):
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            # Apply search filter
+            if search:
+                searchable = (obj.get("name", "") + " " + obj.get("address", "") + " " + obj.get("primary_type", ""))
+                if search.lower() not in searchable.lower():
+                    continue
+            # Apply quality score filter
+            if min_quality:
+                qs = obj.get("quality_score", 0) or 0
+                if qs < min_quality:
+                    continue
+            records.append(obj)
+    except Exception:
+        pass
+
+    total = len(records)
+    records = records[offset:offset + limit]
+
+    return JSONResponse(content={
+        "records": records,
         "total": total,
         "limit": limit,
         "offset": offset,

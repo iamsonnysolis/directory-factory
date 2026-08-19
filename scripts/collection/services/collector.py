@@ -4,7 +4,7 @@ import asyncio
 import json
 from datetime import datetime
 from typing import Any
-from sqlalchemy import select, update, func as sql_func
+from sqlalchemy import select, func as sql_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from models import Job, Place, Log, Project
 from services.google_places import GooglePlacesClient
@@ -17,11 +17,17 @@ async def collect_project(project_id: int):
 
     Creates its own database session to avoid conflicts with HTTP handlers.
     Processes jobs sequentially to avoid SQLite locking issues.
+
+    Logs progress at key milestones: job acquisition, completion, errors,
+    and final summary.
     """
     from database import AsyncSessionLocal
-    
+
+    print(f"[collector] Starting collection orchestrator for project {project_id}")
+
     client = None
     try:
+        print(f"[collector] Initializing Google Places client for project {project_id}")
         client = GooglePlacesClient(settings.GOOGLE_PLACES_API_KEY)
         
         # Get project
@@ -38,6 +44,15 @@ async def collect_project(project_id: int):
                     await log_db.commit()
                 return
         
+        # Get total job count for progress reporting
+        async with AsyncSessionLocal() as count_db:
+            result = await count_db.execute(
+                select(sql_func.count(Job.id)).where(Job.project_id == project_id)
+            )
+            total_jobs = result.scalar()
+        print(f"[collector] Project {project_id}: {total_jobs} total jobs to process")
+
+        completed_count = 0
         while True:
             # Check project status in its own transaction
             async with AsyncSessionLocal() as db:
@@ -67,7 +82,7 @@ async def collect_project(project_id: int):
                             ).limit(1)
                         )
                         running = result.scalar_one_or_none()
-                        
+
                         if not running:
                             # Mark project complete
                             async with AsyncSessionLocal() as complete_db:
@@ -77,6 +92,26 @@ async def collect_project(project_id: int):
                                 if project:
                                     project.status = "complete"
                                     await complete_db.commit()
+
+                            # Log final counts
+                            async with AsyncSessionLocal() as final_db:
+                                done_result = await final_db.execute(
+                                    select(sql_func.count(Job.id)).where(
+                                        Job.project_id == project_id, Job.status == "complete"
+                                    )
+                                )
+                                done_count = done_result.scalar()
+                                failed_result = await final_db.execute(
+                                    select(sql_func.count(Job.id)).where(
+                                        Job.project_id == project_id, Job.status == "failed"
+                                    )
+                                )
+                                failed_count = failed_result.scalar()
+                                place_result = await final_db.execute(
+                                    select(sql_func.count(Place.id)).where(Place.project_id == project_id)
+                                )
+                                place_count = place_result.scalar()
+                            print(f"[collector] Project {project_id} complete: {done_count} jobs done, {failed_count} failed, {place_count} places collected")
                             break
                     await asyncio.sleep(1)
                     continue
@@ -92,18 +127,38 @@ async def collect_project(project_id: int):
                         result_data = await _execute_text_search(project_id, job, client)
                         job.status = "complete"
                         job.result_count = result_data["places_found"]
+                        await db.commit()
+                        if result_data["places_found"] > 0:
+                            print(f"[collector] Job {job.id} complete: {result_data['places_found']} new places (+{result_data['places_skipped_unchanged']} unchanged)")
                     else:
                         job.status = "complete"
                         job.result_count = 0
-                    await db.commit()
+                        await db.commit()
+                    completed_count += 1
+                    if completed_count % 10 == 0:
+                        async with AsyncSessionLocal() as prog_db:
+                            done_result = await prog_db.execute(
+                                select(sql_func.count(Job.id)).where(
+                                    Job.project_id == project_id, Job.status == "complete"
+                                )
+                            )
+                            done_c = done_result.scalar()
+                            pd_result = await prog_db.execute(
+                                select(sql_func.count(Place.id)).where(Place.project_id == project_id)
+                            )
+                            pd_c = pd_result.scalar()
+                        pct = int(completed_count / total_jobs * 100) if total_jobs else 0
+                        print(f"[collector] Progress: {done_c}/{total_jobs} jobs done ({pct}%), {pd_c} places collected")
                 except Exception as e:
                     job.error_message = str(e)[:500]
                     if job.attempts < settings.RETRY_COUNT:
+                        print(f"[collector] Job {job.id} retrying (attempt {job.attempts + 1}/{settings.RETRY_COUNT}): {str(e)[:100]}")
                         job.status = "pending"
                         await db.commit()
                         delay = settings.RETRY_DELAY_SECONDS * job.attempts
                         await asyncio.sleep(delay)
                     else:
+                        print(f"[collector] Job {job.id} FAILED after {job.attempts} attempts: {str(e)[:200]}")
                         job.status = "failed"
                         await db.commit()
                         # Log error in separate transaction
@@ -155,6 +210,14 @@ async def _execute_text_search(project_id: int, job: Job, client: GooglePlacesCl
     try:
         field_tier = payload.get("field_tier", None)
         all_places = await client.search_all_pages_with_bias(query, location_bias, max_pages=5, field_tier_override=field_tier)
+        
+        if not all_places:
+            # Log warning when API returns no results — could be rate limited
+            async with AsyncSessionLocal() as log_db:
+                log = Log(project_id=project_id, level="warning",
+                          message=f"Job {job.id} returned 0 places — API may be rate-limited (429 quota exceeded)")
+                log_db.add(log)
+                await log_db.commit()
         
         for place in all_places:
             place_id = place.get("id")

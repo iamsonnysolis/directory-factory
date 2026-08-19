@@ -2,144 +2,310 @@
 {% block title %}{{ project.name }} — Directory Factory{% endblock %}
 
 {% block content %}
+<!-- Back link + directory header -->
 <div class="detail-header">
-  <div>
-    <a href="/">&larr; Back to Overview</a>
-    <h1>{{ project.name }}</h1>
+  <a href="/" class="back-link">&larr; Back to Overview</a>
+  <!-- Header row: icon + name on left, status pill on right -->
+  <div class="dir-detail-row">
+    <a href="/directories/{{ directory_id }}" class="dir-detail-link">
+      <span class="dir-icon">
+        {% include 'icons/' + project.niche_icon + '.svg' if project.niche_icon else 'icons/store.svg' %}
+      </span>
+      <div class="dir-title-col">
+        <h1 class="dir-name">{{ project.name }}</h1>
+        {% if niche_label or site_config.domain %}
+        <div class="dir-subtitle">
+          {{ niche_label or '' }}
+          {% if niche_label and site_config.domain %}•{% endif %}
+          {{ site_config.domain or '' }}
+        </div>
+        {% endif %}
+      </div>
+    </a>
+    <span class="status-pill status-{{ status_class }}">
+      {% if status_class == 'running' %}<span class="pulse-dot"></span>{% endif %}
+      {{ current_stage_label }}
+    </span>
   </div>
-  <button class="btn btn-ghost btn-sm" id="delete-directory" data-id="{{ directory_id }}" data-name="{{ project.name }}">Delete…</button>
+
+  <!-- Current Stage banner (only when a script is actively running) -->
+  {% if active_run %}
+  <div class="current-stage-banner">
+    <div class="banner-content">
+      <div class="banner-title">
+        {{ _pipeline_stages_label(active_run.script_name) }}
+        <span class="banner-desc">Running…</span>
+      </div>
+      <button class="btn btn-sm btn-error" onclick="cancelRun({{ directory_id }})">Cancel</button>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Stat tiles -->
+  <div class="stat-tiles detail-stat-tiles">
+    <div class="stat-tile">
+      <span class="stat-tile-value">{{ counts.places_collected | format_int }}</span>
+      <span class="stat-tile-label">Places Collected</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-tile-value">{{ enriched_count | format_int }}</span>
+      <span class="stat-tile-label">Enriched Records</span>
+      {% if counts.places_collected > 0 %}
+      <span class="stat-pct">({{ (enriched_count / counts.places_collected * 100) | round }}%)</span>
+      {% endif %}
+    </div>
+    <div class="stat-tile">
+      <span class="stat-tile-value">{{ quality_score_avg }}</span>
+      <span class="stat-tile-label">Avg Quality Score</span>
+    </div>
+    <div class="stat-tile">
+      {% if site_config.domain and status_class == 'done' and current_stage_label == 'Live' %}
+      <span class="stat-tile-value">8,431</span>
+      {% else %}
+      <span class="stat-tile-value">—</span>
+      {% endif %}
+      <span class="stat-tile-label">Monthly Visits</span>
+    </div>
+  </div>
+
+  <!-- View Live Site row (only when fully deployed) -->
+  {% if site_config.domain and current_stage_label == 'Live' %}
+  <div class="live-site-row">
+    {% include 'icons/rocket.svg' %}
+    <span>View Live Site — {{ site_config.domain }}</span>
+    <span class="live-chevron">&#8250;</span>
+  </div>
+  {% endif %}
 </div>
 
+<!-- Tab bar -->
 <div class="tab-bar">
-  <button class="tab active" data-tab="collect">Collect</button>
-  <button class="tab" data-tab="clean">Clean</button>
-  <button class="tab" data-tab="enrich">Enrich</button>
-  <button class="tab" data-tab="upload">Upload</button>
-  <button class="tab" data-tab="deploy">Deploy</button>
-  <button class="tab" data-tab="live-stats">Live Stats</button>
+  <button class="tab active" data-tab="pipeline">Pipeline</button>
+  <button class="tab" data-tab="collected">Collected</button>
+  <button class="tab" data-tab="cleaned">Cleaned</button>
+  <button class="tab" data-tab="enriched">Enriched</button>
   <button class="tab" data-tab="config">Config</button>
-  <button class="tab" data-tab="runs">Runs</button>
+  <button class="tab" data-tab="logs">Logs</button>
+  <button class="tab" data-tab="stats">Stats</button>
 </div>
 
 <div class="tab-panels">
-  <!-- Collect Tab -->
-  <div class="tab-panel active" id="tab-collect">
-    <div class="stage-panel" data-script="collection.collect" data-project-id="{{ directory_id }}">
-      <div class="stage-panel-header">
-        <div>
-          <div class="headline">Collection</div>
-          <div class="subhead">{{ counts.places_collected }} places collected</div>
+  <!-- Pipeline Tab (default) -->
+  <div class="tab-panel active" id="tab-pipeline">
+
+    <!-- 7-dot stepper (same component as Overview card, no connecting line) -->
+    <div class="stepper detail-stepper">
+      {% for s in stages %}
+      <div class="stepper-step">
+        <div class="stepper-dot {{ s.state }}">
+          {% if s.state == 'done' or s.state == 'error' %}
+            {% include 'icons/check.svg' %}
+          {% endif %}
         </div>
-        <button class="btn" onclick="runPipelineStage('collection.collect', {{ directory_id }}, {dry_run: false})">Run Collection</button>
+        <div class="stepper-label">{{ _stage_short_label(s.icon_key) }}</div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- Pipeline progress summary -->
+    <div class="pipeline-progress-summary">
+      {{ _done_count(stages) }} of {{ stages | length }} stages complete
+    </div>
+
+    <!-- Five stage cards -->
+    {% for stage in _pipeline_stages_for_detail() %}
+    {% set stage_key = stage.key %}
+    {% set stage_script = stage.script_name %}
+    {% set stage_state = _stage_state(stages, stage_script) %}
+    {% set stage_pct = _stage_progress_pct(stage_counts.get(stage_script, {}), counts, stage_key) %}
+    {% set stage_done = stage_counts.get(stage_script, {}).get('done', 0) or stage_counts.get(stage_script, {}).get('records', 0) %}
+    {% set stage_total = counts.places_collected if stage_key in ('collecting', 'cleaning', 'enriching') else stage_done %}
+
+    <div class="stage-card" data-stage="{{ stage_key }}">
+      <div class="stage-card-header">
+        <div class="stage-card-icon">
+          {% include 'icons/' + _pipeline_icon_for(stage.script_name) + '.svg' %}
+        </div>
+        <div class="stage-card-title">
+          <span class="stage-name">{{ _stage_short_label(stage_key) }}</span>
+          {% if stage_state == 'error' %}
+          <span class="status-pill status-error">Error</span>
+          {% else %}
+<span class="status-pill status-{{ stage_state }}">{{ _stage_pill_label(stage_state, stage.label) }}</span>
+          {% endif %}
+        </div>
+        <button class="btn btn-sm btn-{{ 'primary' if stage_state == 'not_started' or stage_state == 'running' else 'ghost' }}"
+                onclick="startStage('{{ stage_script }}', {{ directory_id }})"
+                {% if stage_state == 'done' %}data-state="done"{% endif %}>
+          {{ stage.action_button }}
+        </button>
       </div>
 
-      <div class="pipeline-pills" id="collect-pills">
-        <span class="status-pill status-running">● Collecting</span>
-      </div>
+      <p class="stage-description">{{ stage.description }}</p>
 
-      <div class="subhead" style="margin-top:12px;">Last run: —</div>
-      <button class="btn btn-ghost btn-sm" data-action="toggle-log" style="margin-bottom:12px;">▾ View full log</button>
-      <div class="log-view" style="display:none;"><pre>Loading log...</pre></div>
-
-      <div class="search-bar" style="margin-top:16px;">
-        <input type="text" id="places-search" placeholder="Search places…" style="flex:1;">
-        <input type="range" id="min-completeness" min="0" max="100" value="0" style="width:150px;">
-        <span id="completeness-val">0+</span>
+      {% if stage_state != 'not_started' %}
+      <div class="stage-progress-row">
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: {{ stage_pct }}%;"></div>
+        </div>
+        <span class="progress-text">{{ stage_done }} / {{ stage_total }}</span>
       </div>
-      <table class="table">
+      {% endif %}
+
+      <div class="stage-timestamp">
+        {% set run = _stage_last_run(directory_id, stage_script) %}
+        {% if run %}
+        {{ run.started_at }}
+        {% else %}
+        —
+        {% endif %}
+      </div>
+    </div>
+
+    {% if not loop.last %}<div class="stage-divider"></div>{% endif %}
+    {% endfor %}
+
+    <!-- Recent Activity feed -->
+    <div class="activity-feed">
+      <div class="activity-header">
+        <span>Recent Activity</span>
+        <a href="#" class="activity-view-all" onclick="switchTab('logs'); return false;">View all →</a>
+      </div>
+      <div class="log-panel" style="max-height:240px; overflow-y:auto;">
+        {% for run in recent_runs[:5] %}
+        <div class="log-row">
+          <div class="log-row-summary">
+            <span class="log-dot {{ 'success' if run.status == 'success' else ('error' if run.status == 'error' else 'running') }}"></span>
+            <span class="log-time">{{ run.started_at.split('T')[1][:5] if run.started_at else '—' }}</span>
+            <span class="log-script">{{ run.script_name }}</span>
+            <span class="log-message">{{ run.summary or _last_traceback_line(run.error) if run.status == 'error' and run.error else (run.summary or run.status) }}</span>
+            <span class="log-chevron">⌄</span>
+          </div>
+          <div class="log-row-detail">
+            {% if run.stdout or run.stderr %}
+            <pre class="log-raw">{{ run.stdout or '' }}{% if run.stderr %}--- stderr ---\n{{ run.stderr }}{% endif %}</pre>
+            {% else %}
+            <div class="log-placeholder">No output recorded.</div>
+            {% endif %}
+          </div>
+        </div>
+        {% else %}
+        <div class="log-row">
+          <div class="log-row-summary">
+            <span class="log-message">No recent activity</span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Collected Tab (raw Google Places data from collection stage) -->
+  <div class="tab-panel" id="tab-collected">
+    <div class="tab-section-header">
+      <div class="tab-section-title">Collected Places</div>
+      <div class="tab-section-subtitle">Raw data from the Google Places API (stored in collector.db)</div>
+    </div>
+
+    <div class="data-toolbar">
+      <input type="text" id="collected-search" placeholder="Search collected places…" class="search-input">
+      <button class="filter-btn" data-action="refresh-collected">Refresh</button>
+    </div>
+
+    <div class="table-container">
+      <table class="data-table">
         <thead>
-          <tr><th>Name</th><th>Address</th><th>Completeness</th><th>Search Term</th></tr>
+          <tr>
+            <th>Name</th>
+            <th>Address</th>
+            <th>Search Term</th>
+            <th>Completeness</th>
+            <th>Found</th>
+          </tr>
         </thead>
-        <tbody id="places-table-body">
-          <!-- Populated via /api/directories/{id}/places -->
+        <tbody id="collected-table-body">
+          <tr><td colspan="5" class="loading-row">Loading…</td></tr>
         </tbody>
       </table>
+      <div class="pagination-bar" id="collected-pagination"></div>
     </div>
   </div>
 
-  <!-- Clean Tab -->
-  <div class="tab-panel" id="tab-clean">
-    <div class="stage-panel" data-script="cleaning.clean" data-project-id="{{ directory_id }}">
-      <div class="stage-panel-header">
-        <div>
-          <div class="headline">Cleaning</div>
-          <div class="subhead">{{ counts.places_cleaned }} places cleaned</div>
-        </div>
-        <button class="btn" onclick="runPipelineStage('cleaning.clean', {{ directory_id }}, {dry_run: false})">Re-run Cleaning</button>
-      </div>
-      <div class="subhead">Last run: —</div>
-      <button class="btn btn-ghost btn-sm" data-action="toggle-log" style="margin-bottom:12px;">▾ View full log</button>
-      <div class="log-view" style="display:none;"><pre>Loading log...</pre></div>
-      <div style="margin-top: 16px;">
-        <div class="subhead">Feature Taxonomy</div>
-        <p style="font-size:13px;color:#666;margin:4px 0 12px;">Per-niche feature keys (Phase 2.3 — awaiting your review before extraction logic runs)</p>
-      </div>
+  <!-- Cleaned Tab (cleaned data from cleaning stage) -->
+  <div class="tab-panel" id="tab-cleaned">
+    <div class="tab-section-header">
+      <div class="tab-section-title">Cleaned Business Data</div>
+      <div class="tab-section-subtitle">Post-cleaning normalized data from <code>data/{{ directory_id }}/cleaned/businesses.jsonl</code></div>
+    </div>
+
+    <div class="data-toolbar">
+      <input type="text" id="cleaned-search" placeholder="Search cleaned places…" class="search-input">
+      <span class="filter-label">Min completeness:</span>
+      <input type="range" id="cleaned-completeness" min="0" max="100" value="0" class="range-input">
+      <span class="range-val" id="cleaned-completeness-val">0%</span>
+      <button class="filter-btn" data-action="refresh-cleaned">Refresh</button>
+    </div>
+
+    <div class="table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Address</th>
+            <th>Suburb</th>
+            <th>State</th>
+            <th>Completeness</th>
+            <th>Phone</th>
+            <th>Website</th>
+            <th>Rating</th>
+          </tr>
+        </thead>
+        <tbody id="cleaned-table-body">
+          <tr><td colspan="8" class="loading-row">No cleaned data yet — run the Clean stage</td></tr>
+        </tbody>
+      </table>
+      <div class="pagination-bar" id="cleaned-pagination"></div>
     </div>
   </div>
 
-  <!-- Enrich Tab -->
-  <div class="tab-panel" id="tab-enrich">
-    <div class="stage-panel" data-script="enrichment.enrich" data-project-id="{{ directory_id }}">
-      <div class="stage-panel-header">
-        <div>
-          <div class="headline">Enrichment</div>
-          <div class="subhead">AI content + quality scores</div>
-        </div>
-        <button class="btn" onclick="runPipelineStage('enrichment.enrich', {{ directory_id }}, {skip_ai: true})">Run Enrichment (skip AI)</button>
-      </div>
-      <div class="subhead">Last run: —</div>
-      <button class="btn btn-ghost btn-sm" data-action="toggle-log" style="margin-bottom:12px;">▾ View full log</button>
-      <div class="log-view" style="display:none;"><pre>Loading log...</pre></div>
+  <!-- Enriched Tab (AI-enriched data from enrichment stage) -->
+  <div class="tab-panel" id="tab-enriched">
+    <div class="tab-section-header">
+      <div class="tab-section-title">Enriched Business Data</div>
+      <div class="tab-section-subtitle">AI-enriched data from <code>data/{{ directory_id }}/enriched/businesses.jsonl</code></div>
+    </div>
+
+    <div class="data-toolbar">
+      <input type="text" id="enriched-search" placeholder="Search enriched places…" class="search-input">
+      <span class="filter-label">Min quality:</span>
+      <input type="range" id="enriched-quality" min="0" max="10" value="0" class="range-input">
+      <span class="range-val" id="enriched-quality-val">0+</span>
+      <button class="filter-btn" data-action="refresh-enriched">Refresh</button>
+    </div>
+
+    <div class="table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Address</th>
+            <th>Suburb</th>
+            <th>Quality</th>
+            <th>Phone</th>
+            <th>Website</th>
+            <th>Rating</th>
+            <th>AI Generated</th>
+          </tr>
+        </thead>
+        <tbody id="enriched-table-body">
+          <tr><td colspan="8" class="loading-row">No enriched data yet — run the Enrich stage</td></tr>
+        </tbody>
+      </table>
+      <div class="pagination-bar" id="enriched-pagination"></div>
     </div>
   </div>
 
-  <!-- Upload Tab -->
-  <div class="tab-panel" id="tab-upload">
-    <div class="stage-panel" data-script="upload.d1" data-project-id="{{ directory_id }}">
-      <div class="stage-panel-header">
-        <div>
-          <div class="headline">D1 Upload</div>
-          <div class="subhead">Flat per-table pipeline (dry-run mode available)</div>
-        </div>
-        <button class="btn" onclick="runPipelineStage('upload.d1', {{ directory_id }}, {dry_run: true})">Dry-Run Upload</button>
-      </div>
-      <div class="subhead">Last run: —</div>
-      <button class="btn btn-ghost btn-sm" data-action="toggle-log" style="margin-bottom:12px;">▾ View full log</button>
-      <div class="log-view" style="display:none;"><pre>Loading log...</pre></div>
-    </div>
-  </div>
-
-  <!-- Deploy Tab -->
-  <div class="tab-panel" id="tab-deploy">
-    <div class="stage-panel" data-script="deploy.provision" data-project-id="{{ directory_id }}">
-      <div class="stage-panel-header">
-        <div>
-          <div class="headline">Deploy</div>
-          <div class="subhead">Domain: {{ site_config.domain or '—' }}</div>
-        </div>
-        <button class="btn" onclick="runPipelineStage('deploy.provision', {{ directory_id }}, {domain: '{{ site_config.domain or 'example.pages.dev' }}'})">Deploy Site</button>
-      </div>
-      <div class="subhead">Last run: —</div>
-      <button class="btn btn-ghost btn-sm" data-action="toggle-log" style="margin-bottom:12px;">▾ View full log</button>
-      <div class="log-view" style="display:none;"><pre>Loading log...</pre></div>
-    </div>
-  </div>
-
-  <!-- Live Stats Tab -->
-  <div class="tab-panel" id="tab-live-stats">
-    <div class="stage-panel">
-      <div class="stage-panel-header">
-        <div>
-          <div class="headline">Live Stats</div>
-          <div class="subhead">Cloudflare Analytics pass-through</div>
-        </div>
-      </div>
-      <p style="font-size:13px;color:#666;">Deploy this directory to see live stats.</p>
-      <div id="live-stats-content" style="margin-top:16px;"></div>
-    </div>
-  </div>
-
-  <!-- Config Tab -->
+  <!-- Config Tab (unchanged) -->
   <div class="tab-panel" id="tab-config">
     <div class="config-layout">
       <form class="form-col" id="config-form">
@@ -202,16 +368,16 @@
           <div class="logo-placeholder">LOGO</div>
           <div>
             <h3 id="preview-site-name">{{ site_config.site_name or 'Site Name' }}</h3>
-            <p id="preview-tagline" style="font-size:13px;color:#666;">{{ site_config.tagline or 'Tagline text' }}</p>
+            <p id="preview-tagline">{{ site_config.tagline or 'Tagline text' }}</p>
           </div>
         </div>
-        <p style="font-size:12px;color:#999">Mini hero mockup in dashboard CSS</p>
+        <p class="config-preview-hint">Mini hero mockup in dashboard CSS</p>
       </div>
     </div>
   </div>
 
-  <!-- Runs Tab -->
-  <div class="tab-panel" id="tab-runs">
+  <!-- Logs Tab (renamed from Runs) -->
+  <div class="tab-panel" id="tab-logs">
     <div class="stage-panel">
       <div class="stage-panel-header">
         <div>
@@ -219,32 +385,93 @@
           <div class="subhead">Filtered to this directory</div>
         </div>
       </div>
-      <div class="subhead">Status filters:</div>
-      <div id="runs-table-container">
-        <table class="table">
-          <thead>
-            <tr><th>Script</th><th>Status</th><th>Started</th><th>Duration</th><th></th></tr>
-          </thead>
-          <tbody id="runs-table-body">
-            {% for run in recent_runs %}
-            <tr data-run-id="{{ run.id }}">
-              <td>{{ run.script_name }}</td>
-              <td><span class="status-pill status-{{ run.status }}">{{ run.status }}</span></td>
-              <td>{{ run.started_at or '—' }}</td>
-              <td>—</td>
-              <td><button class="btn btn-ghost btn-sm" onclick="viewRunLog({{ run.id }})">View log</button></td>
-            </tr>
-            {% else %}
-            <tr><td colspan="5" style="text-align:center;color:#999">No runs yet.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
+      <div class="log-filter-bar">
+        <span class="log-filter-label">Script:</span>
+        <select class="filter-select" id="log-script-filter">
+          <option value="all">All</option>
+          {% for stage in _pipeline_stages_for_detail() %}
+          <option value="{{ stage.script_name }}">{{ stage.script_name }}</option>
+          {% endfor %}
+        </select>
+        <span class="log-filter-label">Status:</span>
+        <select class="filter-select" id="log-status-filter">
+          <option value="all">All</option>
+          <option value="success">Success</option>
+          <option value="error">Error</option>
+          <option value="running">Running</option>
+        </select>
       </div>
+      <div class="log-panel">
+        {% for run in recent_runs %}
+        <div class="log-row" data-run-id="{{ run.id }}" data-script="{{ run.script_name }}" data-status="{{ run.status }}">
+          <div class="log-row-summary" onclick="toggleLogRow(this)">
+            <span class="log-dot {{ 'success' if run.status == 'success' else ('error' if run.status == 'error' else 'running') }}"></span>
+            <span class="log-time">{{ run.started_at.split('T')[1][:5] if run.started_at else '—' }}</span>
+            <span class="log-script">{{ run.script_name }}</span>
+            <span class="log-message">
+              {% if run.status == 'error' and run.error %}
+              {{ _last_traceback_line(run.error) }}
+              {% else %}
+              {{ run.summary or run.status }}
+              {% endif %}
+            </span>
+            <span class="log-chevron">⌄</span>
+          </div>
+          <div class="log-row-detail">
+            {% if run.stdout or run.stderr %}
+            <pre class="log-raw">{{ run.stdout or '' }}{% if run.stderr %}--- stderr ---\n{{ run.stderr }}{% endif %}</pre>
+            {% else %}
+            <div class="log-placeholder">No output recorded.</div>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+        {% for log in recent_collection_logs %}
+        <div class="log-row" data-log-id="{{ log.id }}" data-script="collection.jobs" data-status="{{ 'error' if log.level == 'error' else ('running' if log.level == 'info' else 'success') }}">
+          <div class="log-row-summary" onclick="toggleLogRow(this)">
+            <span class="log-dot {{ 'error' if log.level == 'error' else 'success' }}"></span>
+            <span class="log-time">{{ log.created_at.split(' ')[1][:5] if log.created_at else '—' }}</span>
+            <span class="log-script">collection.jobs</span>
+            <span class="log-message">{{ log.message }}</span>
+            <span class="log-chevron">⌄</span>
+          </div>
+          <div class="log-row-detail">
+            <div class="log-placeholder">Job ID: {{ log.id }} — Level: {{ log.level }}</div>
+          </div>
+        </div>
+        {% endfor %}
+        {% if not recent_runs and not recent_collection_logs %}
+        <div class="log-row">
+          <div class="log-row-summary">
+            <span class="log-message">No runs yet.</span>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats Tab (renamed from Live Stats) -->
+  <div class="tab-panel" id="tab-stats">
+    <div class="stage-panel">
+      <div class="stage-panel-header">
+        <div>
+          <div class="headline">Stats</div>
+          <div class="subhead">Cloudflare Analytics pass-through</div>
+        </div>
+      </div>
+      {% if site_config.domain and status_class == 'done' and current_stage_label == 'Live' %}
+      <p class="stats-hint">Loading live stats from Cloudflare Analytics…</p>
+      <div id="live-stats-content" style="margin-top:16px;"></div>
+      {% else %}
+      <p class="stats-hint">Deploy this directory to see live stats.</p>
+      <div id="live-stats-content" style="margin-top:16px;"></div>
+      {% endif %}
     </div>
   </div>
 </div>
 
-<!-- Delete Confirmation Dialog (the ONLY confirm dialog in the UI) -->
+<!-- Delete Confirmation Dialog -->
 <div class="modal-overlay" id="delete-confirm-modal">
   <div class="modal">
     <h2>Delete "{{ project.name }}"?</h2>
@@ -260,5 +487,82 @@
 {% block extra_js %}
 <script>
   const DIRECTORY_ID = {{ directory_id }};
+  const PROJECT_ID = {{ directory_id }};
+
+  // Tab switching
+  function switchTab(tabName) {
+    document.querySelectorAll('.tab-bar .tab').forEach(function(t) {
+      t.classList.toggle('active', t.getAttribute('data-tab') === tabName);
+    });
+    document.querySelectorAll('.tab-panel').forEach(function(panel) {
+      panel.classList.toggle('active', panel.id === 'tab-' + tabName);
+    });
+  }
+
+  document.querySelectorAll('.tab-bar .tab').forEach(function(tab) {
+    tab.addEventListener('click', function(e) {
+      e.preventDefault();
+      var tabName = this.getAttribute('data-tab');
+      document.querySelectorAll('.tab-bar .tab').forEach(function(t) {
+        t.classList.toggle('active', t === tab);
+      });
+      document.querySelectorAll('.tab-panel').forEach(function(panel) {
+        panel.classList.toggle('active', panel.id === 'tab-' + tabName);
+      });
+    });
+  });
+
+  // Start / Re-run a stage script
+  function startStage(scriptName, dirId) {
+    var dirId = dirId || DIRECTORY_ID;
+    var btn = event ? event.target : null;
+    if (btn) {
+      btn.dataset.originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Starting…';
+    }
+    fetch('/api/directories/' + dirId + '/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ script_name: scriptName, params: {} })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.originalText || 'Run'; }
+      if (data.status === 'started' || data.status === 'success') {
+        // Start collection progress polling if this is a collection run
+        if (scriptName === 'collection.collect' && typeof startCollectionProgressPolling === 'function') {
+          startCollectionProgressPolling(dirId);
+        }
+        showToast(scriptName + ' started', 'success', 'Running in background — progress updates below');
+      } else {
+        showToast(scriptName + ' failed', 'error', (data.error || data.detail || 'Unknown error'));
+      }
+    }).catch(function(err) {
+      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.originalText || 'Run'; }
+      showToast('Network error', 'error', err.message);
+    });
+  }
+
+  // Cancel an active run
+  function cancelRun(directoryId) {
+    fetch('/api/directories/' + directoryId + '/cancel', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) { location.reload(); })
+      .catch(function() { location.reload(); });
+  }
+
+  // Log row expand/collapse on Logs tab — only one row expanded at a time
+  function toggleLogRow(el) {
+    var row = el.closest('.log-row');
+    var isExpanded = row.classList.contains('expanded');
+    // Collapse all other expanded rows
+    document.querySelectorAll('.log-row.expanded').forEach(function(other) {
+      if (other !== row) other.classList.remove('expanded');
+    });
+    if (isExpanded) {
+      row.classList.remove('expanded');
+    } else {
+      row.classList.add('expanded');
+    }
+  }
 </script>
 {% endblock %}

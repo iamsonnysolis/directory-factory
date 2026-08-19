@@ -206,8 +206,11 @@ class GooglePlacesClient:
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     self._consecutive_429s += 1
+                    # Log the rate limit hit so it shows in collection progress
+                    print(f"[google_places] 429 rate limit hit, retrying (attempt {self._consecutive_429s})")
                     continue  # Retry after sleep
                 # Log error but continue - we'll track failed pages elsewhere
+                print(f"[google_places] HTTP {e.response.status_code}: {str(e)[:200]}")
                 break
             except Exception as e:
                 break

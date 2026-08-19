@@ -9,19 +9,24 @@
 <body>
   <div class="app">
     <!-- Global Shell: Top Bar -->
-    <header class="top-bar">
-      <div class="top-bar-left">
-        <a href="/" class="logo">Directory Factory</a>
-        <nav class="top-bar-nav">
-          <a href="/?view=overview" class="{% if not view or view == 'overview' %}active{% endif %}">Overview</a>
-          <a href="/?view=pipeline" class="{% if view == 'pipeline' %}active{% endif %}">Pipeline</a>
-          <a href="/?view=deploy" class="{% if view == 'deploy' %}active{% endif %}">Deploy</a>
-        </nav>
-      </div>
-      <nav class="top-bar-nav">
-        <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">Settings</a>
-      </nav>
-    </header>
+  <header class="top-bar">
+    <a href="/" class="logo" id="logo">
+      <span class="logo-mark">{% include 'icons/hexagon.svg' %}</span>
+      <span class="logo-wordmark">Directory Factory</span>
+    </a>
+    <button class="hamburger" id="hamburger" aria-label="Menu" aria-expanded="false">
+      <span class="hamburger-line"></span>
+      <span class="hamburger-line"></span>
+      <span class="hamburger-line"></span>
+    </button>
+    <nav class="top-bar-nav" id="top-bar-nav">
+      <a href="/?view=overview" class="{% if not view or view == 'overview' %}active{% endif %}">Overview</a>
+      <a href="/?view=pipeline" class="{% if view == 'pipeline' %}active{% endif %}">In Progress</a>
+      <a href="/?view=deploy" class="{% if view == 'deploy' %}active{% endif %}">Deploy</a>
+      <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">Settings</a>
+    </nav>
+  </header>
+  <div class="nav-overlay" id="nav-overlay"></div>
 
     <!-- Toast container (bottom-right) -->
     <div id="toast-container" class="toast-container"></div>
@@ -31,7 +36,7 @@
       {% block content %}{% endblock %}
     </main>
   </div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v={{ directory_id }}"></script>
   {% block extra_js %}{% endblock %}
 </body>
 </html>

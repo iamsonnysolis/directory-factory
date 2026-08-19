@@ -2,33 +2,33 @@
 {% block title %}Settings — Directory Factory{% endblock %}
 
 {% block content %}
-<h1 style="font-size:24px;font-weight:700;margin-bottom:8px;">Settings</h1>
-<p style="color:#666;margin-bottom:24px;font-size:13px;">Manage credentials and default values. Changes save to <code>.env</code>.</p>
+<h1 class="page-title">Settings</h1>
+<p class="page-subtext">Manage credentials and default values. Changes save to <code>.env</code>.</p>
 
-<form id="settings-form">
+<form id="settings-form" class="settings-form">
   <div class="settings-section">
     <h3>Credentials</h3>
     <div class="settings-row">
       <label>Google Places API Key</label>
-      <input type="text" name="GOOGLE_PLACES_API_KEY" value="{{ env.get('GOOGLE_PLACES_API_KEY', '') }}" readonly style="background:#f9f9f9;">
+      <input type="text" name="GOOGLE_PLACES_API_KEY" value="{{ env.get('GOOGLE_PLACES_API_KEY', '') }}" readonly class="readonly-input">
     </div>
     <div class="settings-row">
       <label>Gemini API Key</label>
-      <input type="text" name="GEMINI_API_KEY" value="{{ env.get('GEMINI_API_KEY', '') }}" readonly style="background:#f9f9f9;">
+      <input type="text" name="GEMINI_API_KEY" value="{{ env.get('GEMINI_API_KEY', '') }}" readonly class="readonly-input">
     </div>
     <div class="settings-row">
       <label>Cloudflare API Token</label>
-      <input type="text" name="CLOUDFLARE_API_TOKEN" value="{{ env.get('CLOUDFLARE_API_TOKEN', '') }}" readonly style="background:#f9f9f9;">
+      <input type="text" name="CLOUDFLARE_API_TOKEN" value="{{ env.get('CLOUDFLARE_API_TOKEN', '') }}" readonly class="readonly-input">
       <button type="button" class="btn btn-ghost btn-sm" data-action="test-credential" data-key="CLOUDFLARE_API_TOKEN">Test</button>
     </div>
     <div class="settings-row">
       <label>Cloudflare Account ID</label>
-      <input type="text" name="CLOUDFLARE_ACCOUNT_ID" value="{{ env.get('CLOUDFLARE_ACCOUNT_ID', '') }}" readonly style="background:#f9f9f9;">
+      <input type="text" name="CLOUDFLARE_ACCOUNT_ID" value="{{ env.get('CLOUDFLARE_ACCOUNT_ID', '') }}" readonly class="readonly-input">
       <button type="button" class="btn btn-ghost btn-sm" data-action="test-credential" data-key="CLOUDFLARE_ACCOUNT_ID">Test</button>
     </div>
     <div class="settings-row">
       <label>GitHub Token</label>
-      <input type="text" name="GITHUB_TOKEN" value="{{ env.get('GITHUB_TOKEN', '') }}" readonly style="background:#f9f9f9;">
+      <input type="text" name="GITHUB_TOKEN" value="{{ env.get('GITHUB_TOKEN', '') }}" readonly class="readonly-input">
       <button type="button" class="btn btn-ghost btn-sm" data-action="test-credential" data-key="GITHUB_TOKEN">Test</button>
     </div>
   </div>
@@ -50,8 +50,8 @@
   </div>
 </form>
 
-<div style="margin-top: 24px;">
+<div class="settings-actions">
   <button type="button" class="btn btn-primary" id="save-settings">Save Settings</button>
-  <span id="save-status" style="font-size:13px;color:#666;margin-left:12px;"></span>
+  <span id="save-status" class="save-status"></span>
 </div>
 {% endblock %}

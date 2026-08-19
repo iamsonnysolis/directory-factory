@@ -19,13 +19,16 @@ once real usage shows the actual pattern.
 ## Dashboard & Orchestration UI
 
 ### 1. Target devices
-**Recommendation:** Desktop-first, not a responsive mobile build.
-The whole system is local-first and laptop-bound by design (see the
-master plan's architecture decisions) — there's no scenario where this
-dashboard is reachable from a phone without deliberately exposing it
-beyond `localhost`, which cuts against the no-auth decision below anyway.
-Build for a normal desktop browser window. No mobile breakpoints, no touch
-target sizing, no mobile confirmation flows for v1.
+**Recommendation (revised):** Mobile-first, not desktop-first — reversed
+from the original recommendation. Primary usage is confirmed to be a phone
+browser over Tailscale, not the laptop directly. Base styles should target
+a narrow viewport (~360-430px) by default; wider layouts are an enhancement
+layered on top via a single breakpoint, not the other way around. One
+breakpoint at `768px` — below it, mobile layout rules (see "Mobile Layout"
+under Global Shell); at or above it, the wider desktop layout already
+built. Touch target sizing matters now (44px minimum), and any element
+that doesn't reflow at narrow widths (fixed-width cards, non-wrapping flex
+rows) is a bug, not a style choice.
 **Status:** Decided.
 
 ### 2. Authentication
@@ -217,7 +220,7 @@ Routes:
 /                          Overview — grid of directories (also serves as "Directories")
 /?view=pipeline            Same grid, grouped by stage (the "Pipeline" nav item)
 /?view=deploy              Same grid, filtered to Upload-done-or-later (the "Deploy" nav item)
-/directories/{id}          Directory Detail — tabbed: Collect | Clean | Enrich | Upload | Deploy | Live Stats | Config | Runs
+/directories/{id}          Directory Detail — tabbed: Pipeline | Config | Logs | Stats (Pipeline contains the Collect/Clean/Enrich/Upload/Deploy stage cards)
 /settings                  Global settings — credentials
 ```
 
@@ -227,10 +230,41 @@ pattern (Q11).
 
 ## Global Shell
 
-Sidebar as built (logo, Overview, Pipeline, Deploy, Live Stats, Config,
-Settings — with "Directories" dropped per above), plus a top bar with a
-directory switcher, notifications, and account menu. Desktop-only per Q1 —
-no responsive breakpoints needed.
+Top nav bar (not a sidebar — correcting the earlier description here to
+match what was actually built): logo mark + wordmark on the left, inline
+links on the right. Rename the **"Pipeline"** nav link to **"In Progress"**
+— it collides with the Directory Detail page's own "Pipeline" tab, and
+having two different things both labeled "Pipeline" visible on screen at
+once (the nav menu and the tab bar) is confusing regardless of styling.
+The four links become: Overview, In Progress, Deploy, Settings.
+
+**Mobile Layout — below the 768px breakpoint:**
+- Hamburger icon: a proper 3-line menu icon (Lucide `menu`), not a custom
+  2-line shape — 44x44px tap target, right side of the top bar, vertically
+  centered with the logo mark. Swaps to an `x` (close) icon while the menu
+  is open.
+- The logo mark (hexagon icon) must still be visible next to the
+  wordmark — don't drop it even if the wordmark itself has to shrink or
+  hide at the narrowest widths.
+- Opening the menu: a **full-width dropdown panel directly below the top
+  bar** (not a narrow floating box offset to one side, which is what's
+  currently overlapping page content awkwardly) — spans the full
+  viewport width, white background, subtle shadow, rounded bottom
+  corners. Behind it, dim the rest of the page with a semi-transparent
+  dark overlay (~45% black) — this is what makes it read as a proper menu
+  layer rather than a stray box sitting on top of content. Tapping the
+  overlay or selecting a link closes the menu.
+- Each link is a full-width row, minimum 44px tall, generous padding
+  (~16px vertical), with a thin divider between rows. Highlight whichever
+  link matches the current page (background tint or a left accent border
+  in the teal accent color) so it's clear where you are.
+- No slide-in animation needed — a simple show/hide is fine, the visual
+  polish comes from the backdrop dim, spacing, and active-state
+  highlighting, not from motion.
+- Nothing in the top bar should ever cause the page to scroll
+  horizontally.
+
+At or above 768px, the current inline-links layout is unchanged.
 
 ## Status Pill Legend (used everywhere)
 
@@ -269,33 +303,42 @@ Directory-level status (Overview cards) uses the same pills, showing the
 ```
 
 **Card contents (fixed set, per Q4 — finalized against the confirmed mockup):**
-- Small rounded-square icon badge (light tinted background), top-left,
-  inline with the title — a **niche icon**, not a status icon. Status is
-  already fully conveyed by the pill and the stepper; a niche icon adds
-  information neither of those do (what kind of business this directory
-  is), which matters when scanning a grid of 11+ structurally-identical
-  cards. See the icon mapping table below.
-- Directory name, next to the icon
-- Status pill on its own row below the title (not squeezed onto the title
-  row, which collides with longer directory names) — sentence case
-  ("Deployed", "Collecting"), not all-caps
+- Small rounded-square icon badge (~48x48px, ~10px radius, light tinted
+  background matching the teal accent), top-left, inline with the title —
+  a **niche icon**, not a status icon. Status is already fully conveyed by
+  the pill and the stepper; a niche icon adds information neither of those
+  do (what kind of business this directory is), which matters when
+  scanning a grid of 11+ structurally-identical cards. See the icon
+  mapping table below.
+- Directory name, next to the icon (~12-16px gap between icon and title)
+- Status pill on the **same row** as the icon/title, right-aligned —
+  sentence case ("Deployed", "Collecting"), not all-caps. If a directory
+  name is long enough to risk colliding with the pill, truncate the name
+  with an ellipsis or let it wrap to a second line — don't push the pill
+  onto its own row to solve that, keep pill and title on one row.
+- **No category/niche-label subtitle line under the title** — deliberately
+  excluded even though a reference mockup shows one.
 - 7-dot pipeline stepper, **with labels under each dot**: Idea · Collect ·
-  Clean · Enrich · Upload · Deploy · Live. Every dot uses the same visual
-  language regardless of stage — plain filled circle with a checkmark
-  icon for done, pulsing for the current stage, empty outlined circle for
-  not-yet-reached. Never a different icon per stage (e.g. a magnifying
-  glass for Collect, a spinner for Clean) — that reads as inconsistent,
-  not informative. Connect the dots with a thin line; align each label
-  directly under its dot, evenly spaced.
-- Place count and last-updated on one row, each with a small icon (pin for
-  place count, calendar for updated) — not plain unadorned text
-- One button, **always labeled "View Project"** — not dynamic per stage.
-  A label that changes meaning per card was more confusing in practice
-  than useful; a single consistent action (go to the directory's detail
-  page) is clearer. Always the same accent color across every card
-  regardless of status — don't color-shift the button by stage.
+  Clean · Enrich · Upload · Deploy · Live. Dot states: **done** = filled
+  teal circle with a white checkmark; **current/running** = filled blue
+  circle with a white inner ring (pulsing); **not-yet-reached** = empty
+  outlined grey circle, nothing inside it — no fill, no icon, no inner
+  dot. No connecting line between dots — dropped after repeated
+  implementation issues; the dots and labels alone are sufficient. Each
+  label must be horizontally centered directly under its own dot, evenly
+  spaced across the full card width regardless of label length.
+- Place count and last-updated on one row, space-between layout (count +
+  pin icon on the left, "Updated ..." + calendar icon on the right) — no
+  divider character between them.
+- One button, **always labeled "View Project"**, always the same teal
+  accent color regardless of status — not dynamic per stage, and not the
+  blue shown in some reference mockups.
 - No secondary/kebab menu on the card itself — deletion lives on the
-  Directory Detail page only, to avoid an accidental click on a dense grid
+  Directory Detail page only, to avoid an accidental click on a dense grid.
+- Generous internal padding throughout (~24px card padding; ~20-24px
+  between the header row and the stepper; ~16-20px between the stepper and
+  the divider below it; ~16px between the divider and the places row;
+  ~16-20px before the button) — err toward more whitespace, not less.
 
 **Niche icon mapping** — Lucide icon per directory, keyed by niche label.
 Verify each name actually exists in the installed Lucide set before using
@@ -336,113 +379,173 @@ directories will be added later:
 
 ## Page: Directory Detail (`/directories/{id}`)
 
+Synthesized from two reference mockups — consolidated from the original
+8-tab breakdown down to 4, with a persistent header/banner/stat area that
+stays visible regardless of which tab is active. Nothing from the original
+8-tab version is lost — Collect's map+table and the Clean/Enrich/Upload/
+Deploy shared panel shape still exist, they're just nested as expandable
+cards inside the Pipeline tab instead of being separate tabs.
+
+**This entire header/banner/stat area is single-column below 768px** — the
+current build has a stat tile positioned beside the header instead of
+below it, and it doesn't reflow, which is the mobile bug to fix. Layout
+order, one column, full width, top to bottom:
+
+```
+← Back to Overview
+[icon] Directory Name
+  ● Status pill                    (wraps below the name if it
+                                     doesn't fit on the same line —
+                                     never causes horizontal scroll)
+Pet Services • mobilegroomers.com.au
+
+┌─ Current Stage banner (full width, only when running) ─┐
+│  Enriching — AI is generating descriptions...           │
+│  ▓▓▓▓▓▓▓▓░░░░░░  62%   7,714 / 12,418 records            │
+│  [Cancel]                                                │
+└──────────────────────────────────────────────────────┘
+
+┌──────────────┐ ┌──────────────┐
+│   Places     │ │  Enriched    │   ← 2x2 grid, not a 4-wide row.
+│   12,842     │ │   7,714      │      Confirm all 4 tiles actually
+├──────────────┤ ├──────────────┤      exist in the DOM — only 1 of 4
+│ Avg Quality  │ │   Monthly    │      is visible in the current build,
+│     85       │ │   Visits     │      which may mean the other 3 are
+│              │ │   8,431      │      overflowing off-screen rather
+└──────────────┘ └──────────────┘      than a pure styling issue.
+
+🚀 View Live Site — mobilegroomers.com.au    ›
+
+[ Pipeline ] [ Config ] [ Logs ] [ Stats ]
+──────────────────────────────────────────
+(active tab's content, below)
+```
+
+At or above 768px, this becomes the wider layout already built — icon/
+title/pill on one row, 4 stat tiles in a single row, as originally speced:
+
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │  Directory Factory                         [Overview][Settings] │
 ├────────────────────────────────────────────────────────────────┤
-│  ← Mobile Dog Groomers                          [Delete...]      │
+│  ← [icon] Mobile Dog Groomers          ● Live            [⋮]     │
+│    Pet Services • mobilegroomers.com.au                          │
 │                                                                   │
-│  [Collect] [Clean] [Enrich] [Upload] [Deploy] [Live Stats]       │
-│  [Config] [Runs]                                                 │
+│  ┌─ Current Stage banner (only visible while something's        │
+│  │  actively running — hidden entirely when idle) ─────────┐     │
+│  │  Enriching — AI is generating descriptions, services,   │     │
+│  │  and SEO content for your listings.                     │     │
+│  │  ▓▓▓▓▓▓▓▓░░░░░░  62%   7,714 / 12,418 records            │     │
+│  │  [Cancel]                                                │     │
+│  └───────────────────────────────────────────────────────┘     │
+│                                                                   │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐            │
+│  │  Places  │ │ Enriched │ │Avg Quality│ │ Monthly  │            │
+│  │  12,842  │ │  7,714   │ │   85      │ │  Visits  │            │
+│  │          │ │ 60% of   │ │           │ │   8,431  │            │
+│  │          │ │  total   │ │           │ │          │            │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘            │
+│                                                                   │
+│  🚀 View Live Site — mobilegroomers.com.au              ›       │
+│  (only shown once Deploy is Done)                                │
+│                                                                   │
+│  [ Pipeline ] [ Config ] [ Logs ] [ Stats ]                      │
 │  ───────────────────────────────────────────────────────────    │
-│                                                                   │
-│                     (active tab's panel, below)                  │
-│                                                                   │
+│                     (active tab's content, below)                │
 └────────────────────────────────────────────────────────────────┘
 ```
 
-Tabs, not a scrolling single page — clicking a tab swaps the panel below
-(plain JS show/hide, no page reload). The active tab is whichever stage
-the directory is currently on by default when the page loads; the user can
-click any tab regardless of pipeline position (e.g. to check Collect's
-places table while Enrich is running).
+`[⋮]` opens exactly one option: **Delete Directory** — the only
+destructive action anywhere in the UI, unchanged from before, still
+requires the confirm dialog under "Confirmation & destructive actions".
 
-`[Delete...]` in the header opens a confirm dialog (see "Confirmation &
-destructive actions" below) — the only destructive action in the whole UI.
+**Stat tiles** — four, always real data, no invented metrics:
+- Places Collected
+- Enriched Records (count + % of total collected)
+- Avg Quality Score (average of the `quality_score` column across this
+  directory's businesses)
+- Monthly Visits — em-dash placeholder if not yet deployed, never `0`
+  (a real `0` and "not applicable yet" should never look the same)
 
-### Tab: Collect
+**Current Stage banner** — only rendered when a script is actively
+`running` for this directory; absent entirely when idle, so it doesn't
+take up space on directories with nothing in progress. The action button
+is **Cancel**, not Pause — there's no real pause/resume for anything
+except Collection (which already has it, ported from `dataset-collector`).
+Cancel just stops the subprocess; since Clean/Enrich/Upload should already
+skip already-processed records on re-run, a cancel-and-rerun is a fine
+substitute for true pause/resume without new engineering.
 
-```
-┌─────────────────────────────────────────────┐
-│  [● Running]           [Pause]  [Retry Failed]│
-│  ▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░  62% (291/469 jobs)     │
-│                                                │
-│  Places: 387   Duplicates skipped: 12   Failed: 2 │
-│                                                │
-│  🗺  [map with pins]                          │
-│                                                │
-│  Places  [search: ______]  [min completeness ▾]│
-│  ┌────────────────────────────────────────┐  │
-│  │ Name | Address | Search Term | Score     │  │
-│  │ ...  | ...     | ...         | ...       │  │
-│  └────────────────────────────────────────┘  │
-│  ‹ 1 2 3 ... 8 ›                              │
-│                                                │
-│  Recent log ▾ (collapsed by default)          │
-└─────────────────────────────────────────────┘
-```
-
-Ported directly from `dataset-collector`'s existing project detail page
-(Q12) — map, places table with search + completeness filter, pagination,
-log feed. `[Retry Failed]` re-runs only failed jobs (this already exists in
-the collector — not new build).
-
-### Tab: Clean / Enrich / Upload / Deploy — shared panel shape
-
-These four stages share one layout pattern (Q4, Q5, Q8):
+### Tab: Pipeline (default)
 
 ```
 ┌─────────────────────────────────────────────┐
-│  [● Done]                        [Re-run]     │
-│  387 places cleaned                            │
-│                                                │
-│  Last run: 30 Jul 2026, 05:30                  │
-│  [View full log ▾]  (collapsed — expands to    │
-│   show full stdout/stderr from runs.db)        │
+│  Pipeline Progress          6 of 7 · 86%      │
+│  ●──●──●──●──●──●──○  (7-dot stepper —        │
+│  Idea Collect Clean Enrich Upload Deploy Live │
+│  same component as the Overview card, no      │
+│  connecting line, per the earlier decision)   │
+├─────────────────────────────────────────────┤
+│  📍 Collect          ✓ Complete    100%       │
+│  Google Places API collection                 │
+│  12,842 / 12,842        ▓▓▓▓▓▓▓▓▓▓▓▓▓▓        │
+│  Completed 30 Jul 2026, 05:14          [⌄]    │
+├─────────────────────────────────────────────┤
+│  ✨ Clean            ✓ Complete    99%        │
+│  Data normalization & structure                │
+│  12,671 / 12,842        ▓▓▓▓▓▓▓▓▓▓▓▓▓░        │
+│  Completed 30 Jul 2026, 05:18          [⌄]    │
+├─────────────────────────────────────────────┤
+│  🪄 Enrich           ● Running     62%        │
+│  AI content generation                         │
+│  7,714 / 12,418         ▓▓▓▓▓▓▓░░░░░░░        │
+│  Started 30 Jul 2026, 05:26            [⌄]    │
+├─────────────────────────────────────────────┤
+│  ☁ Upload            ○ Not started             │
+├─────────────────────────────────────────────┤
+│  🚀 Deploy            ○ Not started             │
+│  Domain: [________________]                    │
 └─────────────────────────────────────────────┘
+
+  Recent Activity                    View all →
+  ┌─────────────────────────────────────────┐
+  │ 05:26  Enrichment started                │
+  │ 05:18  Cleaning completed    12,671 rows │
+  │ 05:14  Collection completed  12,842 rows │
+  │ 05:02  Collection started                │
+  └─────────────────────────────────────────┘
+  (CLI-log styled — dark background, monospace,
+   small colored status dot per line)
 ```
 
-- One status pill + one headline metric (Q4) — no per-item table for v1
-  (Q5: whole-stage re-run only, no per-item retry UI yet)
-- `[Re-run]` — single click, no confirmation dialog (not destructive,
-  just reprocesses)
-- `[View full log ▾]` expands inline to show the complete stdout/stderr for
-  the most recent run (Q8) — plain `<pre>` block, monospace
-- While running: pill shows `● Running`, `[Re-run]` is disabled, panel
-  polls every 3 seconds (Q3) until status changes
+Five stacked stage cards — **Collect, Clean, Enrich, Upload, Deploy** —
+each with: icon, name, status pill, one-line description of what that
+stage does, record progress (`X / Y` + a progress bar), a
+started/completed timestamp, and an expand control `[⌄]`.
 
-**Clean-specific addition:** below the shared panel, a small **Feature
-Taxonomy** section — a simple tag list of this directory's `feature_key`
-values (editable: add/remove/rename), since Phase 2's plan calls for a
-per-niche taxonomy that's reviewed before extraction logic runs.
+- Expanding **Collect** reveals the map + places table + search/
+  completeness filter (Q12, ported from `dataset-collector`) — this
+  content is unchanged from the original Collect tab, just nested here.
+- Expanding **Clean / Enrich / Upload** reveals the full stdout/stderr log
+  for the most recent run (Q8) — unchanged from the original shared panel
+  shape, just nested here. Clean's expanded view also shows the **Feature
+  Taxonomy** editor (Q2.4).
+- Expanding **Deploy** reveals the same content as before: the Domain
+  input field, and once deployed, this is where `[View Live Site ↗]`
+  originates (also surfaced as the persistent row above the tabs).
+- Each collapsed card still shows a `[Re-run]` (or `[Start]` if not yet
+  run) button without needing to expand — one click from the collapsed
+  state for the common case, expand only when something needs
+  investigating.
+- No separate "Quick Actions" shortcut row — every action already has a
+  button on its own stage card here; a duplicate shortcut bar would just
+  be two ways to trigger the same five things.
 
-**Deploy-specific addition:** one text input for **Domain** (Q10) above
-the `[Re-run]`/`[Deploy]` button — everything else about the deploy (repo,
-branch, build command) is fixed and not editable here, per the "one shared
-template" decision. Once deployed, show `[View Live Site ↗]` linking to
-the domain.
-
-### Tab: Live Stats
-
-Only shows meaningful content once Deploy is `Done`; otherwise shows
-"Deploy this directory to see live stats."
-
-```
-┌─────────────────────────────────────────────┐
-│  Requests: 1,204   Visitors: 389   Cache: 94%│
-│                                                │
-│  [line chart: visits over time] [7d 30d 90d] │
-│                                                │
-│  Top pages                                    │
-│  ┌────────────────────────────────────────┐  │
-│  │ /                    412 visits          │  │
-│  │ /nsw/sydney           88 visits          │  │
-│  └────────────────────────────────────────┘  │
-└─────────────────────────────────────────────┘
-```
-
-Pulled live from the Cloudflare Analytics API on page load — no local
-storage of stats needed, just a pass-through call.
+**Recent Activity** — a condensed feed (last ~5 events) styled like a
+CLI log (dark background, monospace, small colored status dot per line),
+with a "View all →" link to the Logs tab. This is deliberately the same
+visual language as the Logs tab itself, just truncated — consistency
+between the preview and the full view.
 
 ### Tab: Config
 
@@ -471,31 +574,140 @@ storage of stats needed, just a pass-through call.
 └───────────────────────┴───────────────────────┘
 ```
 
-Field list is exactly Q6's decided `site_config` list. Preview is the
-in-dashboard mock described in Q7 — plain HTML/CSS in the dashboard itself
-re-rendering live as form fields change (JS `input` event listeners
-updating the preview DOM directly, no server round-trip needed for the
-preview itself). `[Save]` persists to the directory's D1 `site_config`
-table.
+Unchanged from before — field list is exactly Q6's decided `site_config`
+list, preview is the in-dashboard mock described in Q7.
 
-### Tab: Runs
+### Tab: Logs
+
+Renamed from "Runs" — same underlying data. **Full dark terminal styling
+throughout**, reversing the earlier "light rows" instruction — that was
+the wrong call for a tool built for one technical user; a real terminal
+look is exactly right here. Collapsed-by-default is still the core
+requirement (unchanged from before): the current build renders every
+entry's full raw output inline with no collapse, which is the main reason
+it's unusable, separate from color.
+
+The whole log list lives in **one continuous dark panel** (`#0d1117`),
+not a stack of individually-bordered white cards. Filter controls
+(Script/Status dropdowns) stay as normal light page UI *above* the panel —
+they're page chrome, not log content, so they don't need to be dark too.
+
+**Exact structure — use this HTML/CSS directly, don't reinterpret it.**
+The current build's floating dot/chevron/text-on-separate-lines bug comes
+from these not being nested as one row; this structure prevents that by
+construction:
+
+```html
+<div class="log-panel">
+  <div class="log-row">
+    <div class="log-row-summary" onclick="toggleLogRow(this)">
+      <span class="log-dot success"></span>
+      <span class="log-time">12:03</span>
+      <span class="log-script">collection.collect</span>
+      <span class="log-message">Collection complete: 387 places</span>
+      <span class="log-chevron">⌄</span>
+    </div>
+    <div class="log-row-detail"><!-- full stdout/stderr, hidden unless expanded --></div>
+  </div>
+  <!-- one .log-row per entry -->
+</div>
+```
+
+```css
+.log-panel {
+  background: #0d1117;
+  border-radius: 8px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  overflow: hidden;
+}
+.log-row { border-bottom: 1px solid rgba(255,255,255,0.08); }
+.log-row:last-child { border-bottom: none; }
+.log-row-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+.log-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.log-dot.success { background: #14b8a6; }  /* same teal used everywhere else */
+.log-dot.error { background: #ef4444; }
+.log-dot.running { background: #3b82f6; }
+.log-time { color: #8b949e; font-size: 12px; flex-shrink: 0; }
+.log-script { color: #e6e6e6; font-weight: 600; font-size: 13px; flex-shrink: 0; }
+.log-message {
+  color: #9ca3af;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.log-chevron { color: #8b949e; flex-shrink: 0; }
+.log-row-detail {
+  display: none;
+  padding: 0 16px 16px 34px;
+  max-height: 400px;
+  overflow-y: auto;
+  color: #d1d5db;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.log-row.expanded .log-row-detail { display: block; }
+```
+
+Key points this structure enforces:
+- **The entire row is the click target** (`.log-row-summary`, not just the
+  chevron) — `toggleLogRow` adds/removes an `expanded` class on the parent
+  `.log-row`. Clicking anywhere on the row toggles it, not just the tiny
+  icon.
+- **One row, one flex line** — dot, time, script name, message, and
+  chevron are all children of the same flex container, so they can never
+  drift apart into separately-floating elements the way they did before.
+- **Status dot colors match the app's existing palette** (teal for
+  done/success, red for error, blue for running) — same colors used
+  everywhere else in the dashboard, just set against the dark background
+  here. Not a separate green-terminal color scheme unique to this tab.
+- **Message truncates with ellipsis when collapsed** — for a successful
+  run, the stored `summary` field; for an error, the **last line only** of
+  the traceback (the actual `ExceptionType: message` line, not "Traceback
+  (most recent call last):") — that's the part worth seeing without
+  expanding.
+- **Expanded detail scrolls within its own box** (max-height ~400px) —
+  never blows out the page length no matter how long the traceback is.
+
+Filtered to this directory by default (Q9). Filter dropdowns use the same
+styled component already fixed on the Overview page — not plain native
+`<select>` elements.
+
+**The Pipeline tab's "Recent Activity" condensed feed uses this same dark
+panel treatment** (reverting the earlier light-row instruction there too)
+— same `.log-panel`/`.log-row` structure, just showing the last ~5 entries
+with no expand needed (it's a preview). The "View all →" link takes you to
+this Logs tab.
+
+### Tab: Stats
+
+Renamed from "Live Stats" — unchanged otherwise. Only shows meaningful
+content once Deploy is `Done`; otherwise shows "Deploy this directory to
+see live stats."
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Script [All ▾]  Status [All ▾]  [Date range]│
+│  Requests: 1,204   Visitors: 389   Cache: 94%│
+│                                                │
+│  [line chart: visits over time] [7d 30d 90d] │
+│                                                │
+│  Top pages                                    │
 │  ┌────────────────────────────────────────┐  │
-│  │ Script         Status   Started    ⌄     │  │
-│  │ cleaning.clean Done     05:30      ⌄     │  │
-│  │ enrichment.enrich Error 05:41      ⌄     │  │
-│  │ ...                                       │  │
+│  │ /                    412 visits          │  │
+│  │ /nsw/sydney           88 visits          │  │
 │  └────────────────────────────────────────┘  │
-│  ‹ 1 2 3 ›                       20 per page  │
 └─────────────────────────────────────────────┘
 ```
 
-Filtered to this directory by default (Q9); each row expands (⌄) to the
-full stdout/stderr for that run, same pattern as the per-stage panels'
-`[View full log]`.
+Pulled live from the Cloudflare Analytics API on page load — no local
+storage of stats needed, just a pass-through call.
 
 ---
 

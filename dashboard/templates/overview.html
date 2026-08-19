@@ -34,32 +34,6 @@
   </div>
 </div>
 
-<!-- Search / Filter / Sort row -->
-<div class="toolbar-row">
-  <input type="text" id="dir-search" placeholder="Search directories…" class="search-input" value="{{ search_param }}">
-  <select id="status-filter" class="filter-select">
-    <option value="">All statuses</option>
-    <option value="not_started">Not Started</option>
-    <option value="collecting">Collecting</option>
-    <option value="cleaning">Cleaning</option>
-    <option value="enriching">Enriching</option>
-    <option value="uploading">Uploading</option>
-    <option value="deploying">Deploying</option>
-    <option value="live">Live</option>
-    <option value="error">Error</option>
-  </select>
-  <select id="sort-by" class="sort-select">
-    <option value="updated_at">Last updated</option>
-    <option value="name">Name</option>
-    <option value="place_count">Places</option>
-    <option value="current_stage">Stage</option>
-  </select>
-  <select id="sort-order" class="sort-select">
-    <option value="desc">Desc</option>
-    <option value="asc">Asc</option>
-  </select>
-</div>
-
 {% if directories | length == 0 %}
 <div class="card-empty">
   <p>No directories found. Create one to get started.</p>
@@ -69,10 +43,14 @@
 <div class="project-grid" id="project-grid">
   {% for d in directories %}
   <div class="project-card" data-directory-id="{{ d.id }}"
-       data-status-class="{{ d.status_class }}"
-       data-current-stage="{{ d.current_stage }}">
-    <div class="project-card-header">
-      <div class="card-title-row">
+     data-status-class="{{ d.status_class }}"
+     data-current-stage="{{ d.current_stage }}"
+     data-place-count="{{ d.place_count }}"
+     data-updated-at="{{ d.updated_at or d.created_at }}">
+
+    <!-- Header row: niche icon badge + directory name + status pill (same row) -->
+    <div class="card-header-row">
+      <div class="header-left">
         <div class="niche-badge">
           {% if d.niche_icon %}
             {% include 'icons/' + d.niche_icon + '.svg' %}
@@ -80,61 +58,84 @@
             {% include 'icons/store.svg' %}
           {% endif %}
         </div>
-        <div class="project-card-name">
+        <div class="project-card-name" title="{{ d.name }}">
           <a href="/directories/{{ d.id }}" class="dir-link">{{ d.name }}</a>
         </div>
       </div>
-      <span class="status-pill status-{{ d.status_class }}">
+      <div class="status-pill status-{{ d.status_class }}">
         {% if d.status_class == 'running' %}<span class="pulse-dot"></span>{% endif %}
         {{ d.current_stage }}
-      </span>
-    </div>
-
-    <div class="stepper-with-titles">
-      <div class="stepper-line"></div>
-      <div class="stepper-circles">
-        {% for s in d.stages %}
-          <div class="stepper-dot
-            {% if s.state == 'done' %}stepper-dot-done{% elif s.state == 'running' %}stepper-dot-running{% elif s.state == 'error' %}stepper-dot-error{% else %}stepper-dot-not-started{% endif %}"
-            title="{{ s.label }}">
-            {% if s.state == 'done' %}
-              {% include 'icons/check.svg' %}
-            {% elif s.state == 'error' %}
-              {% include 'icons/x.svg' %}
-            {% else %}
-              <span class="stepper-pulse-dot"></span>
-            {% endif %}
-          </div>
-        {% endfor %}
-      </div>
-      <div class="stepper-titles">
-        {% for s in d.stages %}
-          <span class="stepper-title
-            {% if s.state == 'running' %}stepper-title-current{% endif %}
-            {% if s.state == 'error' %}stepper-title-error{% endif %}"
-          >{{ s.label }}</span>
-        {% endfor %}
       </div>
     </div>
 
+    <!-- Pipeline stepper: 7 dots in a CSS grid, labels directly beneath each dot -->
+    <div class="stepper">
+      {% set stepper_stages = d.stages %}
+      <div class="stepper-step">
+        <div class="stepper-dot {% if stepper_stages[0].state == 'done' %}done{% elif stepper_stages[0].state == 'running' %}current{% elif stepper_stages[0].state == 'error' %}done{% else %}{% endif %}">
+          {% if stepper_stages[0].state == 'done' or stepper_stages[0].state == 'error' %}{% include 'icons/check.svg' %}{% endif %}
+        </div>
+        <div class="stepper-label">Idea</div>
+      </div>
+      <div class="stepper-step">
+        <div class="stepper-dot {% if stepper_stages[1].state == 'done' %}done{% elif stepper_stages[1].state == 'running' %}current{% elif stepper_stages[1].state == 'error' %}done{% else %}{% endif %}">
+          {% if stepper_stages[1].state == 'done' or stepper_stages[1].state == 'error' %}{% include 'icons/check.svg' %}{% endif %}
+        </div>
+        <div class="stepper-label">Collect</div>
+      </div>
+      <div class="stepper-step">
+        <div class="stepper-dot {% if stepper_stages[2].state == 'done' %}done{% elif stepper_stages[2].state == 'running' %}current{% elif stepper_stages[2].state == 'error' %}done{% else %}{% endif %}">
+          {% if stepper_stages[2].state == 'done' or stepper_stages[2].state == 'error' %}{% include 'icons/check.svg' %}{% endif %}
+        </div>
+        <div class="stepper-label">Clean</div>
+      </div>
+      <div class="stepper-step">
+        <div class="stepper-dot {% if stepper_stages[3].state == 'done' %}done{% elif stepper_stages[3].state == 'running' %}current{% elif stepper_stages[3].state == 'error' %}done{% else %}{% endif %}">
+          {% if stepper_stages[3].state == 'done' or stepper_stages[3].state == 'error' %}{% include 'icons/check.svg' %}{% endif %}
+        </div>
+        <div class="stepper-label">Enrich</div>
+      </div>
+      <div class="stepper-step">
+        <div class="stepper-dot {% if stepper_stages[4].state == 'done' %}done{% elif stepper_stages[4].state == 'running' %}current{% elif stepper_stages[4].state == 'error' %}done{% else %}{% endif %}">
+          {% if stepper_stages[4].state == 'done' or stepper_stages[4].state == 'error' %}{% include 'icons/check.svg' %}{% endif %}
+        </div>
+        <div class="stepper-label">Upload</div>
+      </div>
+      <div class="stepper-step">
+        <div class="stepper-dot {% if stepper_stages[5].state == 'done' %}done{% elif stepper_stages[5].state == 'running' %}current{% elif stepper_stages[5].state == 'error' %}done{% else %}{% endif %}">
+          {% if stepper_stages[5].state == 'done' or stepper_stages[5].state == 'error' %}{% include 'icons/check.svg' %}{% endif %}
+        </div>
+        <div class="stepper-label">Deploy</div>
+      </div>
+      <div class="stepper-step">
+        <div class="stepper-dot {% if stepper_stages[6].state == 'done' or stepper_stages[6].state == 'running' %}done{% elif stepper_stages[6].state == 'error' %}done{% else %}{% endif %}">
+          {% if stepper_stages[6].state == 'done' or stepper_stages[6].state == 'running' or stepper_stages[6].state == 'error' %}{% include 'icons/check.svg' %}{% endif %}
+        </div>
+        <div class="stepper-label">Live</div>
+      </div>
+    </div>
+
+    <!-- Divider line -->
+    <div class="card-divider"></div>
+
+    <!-- Places / Updated row (space-between, no vertical pipe) -->
     <div class="project-meta">
-      <span class="meta-item">
+      <div class="meta-left">
         {% include 'icons/map-pin.svg' %}
-        {{ d.place_count }} places
-      </span>
-      <span class="meta-divider"></span>
-      <span class="meta-item">
+        <span class="count">{{ d.place_count }}</span>
+        <span>places</span>
+      </div>
+      <div class="meta-right">
         {% include 'icons/calendar.svg' %}
-        Updated {{ (d.updated_at or d.created_at).split('T')[0] if (d.updated_at or d.created_at) else '—' }}
-      </span>
+        <span class="updated">Updated {{ (d.updated_at or d.created_at).split('T')[0] if (d.updated_at or d.created_at) else '—' }}</span>
+      </div>
     </div>
 
+    <!-- Action button -->
     <div class="project-card-footer">
       <button class="btn btn-sm btn-primary card-action-btn"
-        data-dir-id="{{ d.id }}"
-        data-stage="{{ d.current_stage }}"
-        data-status-class="{{ d.status_class }}">
-        {{ d.action_button_label }}
+        data-dir-id="{{ d.id }}">
+        View Project
       </button>
     </div>
   </div>
@@ -145,9 +146,13 @@
 <!-- New Directory Modal -->
 <div class="modal-overlay" id="new-directory-modal">
   <div class="modal">
-    <button class="btn btn-ghost" id="close-modal" style="float:right;border:none;font-size:20px;padding:6px 12px;min-height:44px;min-width:44px;">×</button>
-    <h2>New Directory</h2>
-    <form id="create-directory-form">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>New Directory</h2>
+        <button class="btn btn-ghost" id="close-modal" title="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <form id="create-directory-form">
       <div class="form-group">
         <label for="dir-name">Name</label>
         <input type="text" id="dir-name" name="name" required placeholder="e.g. Mobile Dog Groomers">
@@ -165,13 +170,15 @@
         <input type="text" id="dir-domain" name="domain" placeholder="e.g. doggroomers.pages.dev">
       </div>
       <div class="form-group">
-        <label for="search-terms-input">Search terms</label>
+        <label for="search-terms-input">Search terms <span class="required">*</span></label>
         <div id="search-terms-tags"></div>
-        <div style="display: flex; gap: 4px;">
-        <input type="text" id="search-terms-input" name="search_terms_input" placeholder="e.g. dog grooming brisbane" style="flex: 1;">
-        <button type="button" class="btn btn-sm btn-ghost" id="add-search-term" title="Add search term">+</button>
+        <div class="input-group">
+        <input type="text" id="search-terms-input" name="search_terms_input" placeholder="e.g. dog grooming brisbane — press Enter or click +" class="flex-input" autocomplete="off">
+        <button type="button" class="btn btn-sm btn-primary" id="add-search-term" title="Add search term (or press Enter)">+</button>
         </div>
         <input type="hidden" id="search_terms" name="search_terms" value="">
+        <div class="form-hint">You must add at least one search term. Collection will find 0 results without search terms.</div>
+        <div class="error-message" id="search-terms-error" style="display:none;">Please add at least one search term before creating the directory.</div>
       </div>
       <div class="form-group">
         <label>Target metros</label>
@@ -199,12 +206,13 @@
         <button type="submit" class="btn btn-primary">Create Directory</button>
       </div>
     </form>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}
 {% block extra_js %}
 <script>
   const OVERVIEW_VIEW = "{{ view or 'overview' }}";
-  const SEARCH_PARAM = "{{ search_param or '' }}";
 </script>
 {% endblock %}

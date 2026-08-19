@@ -10,9 +10,14 @@
   window.showToast = function(message, type, detail) {
     type = type || 'success';
     if (!toastContainer) return;
+    // Remove any existing progress/info toast to avoid stacking
+    if (type === 'info' || type === 'collection-progress') {
+      const existing = toastContainer.querySelector('.toast-collection-progress');
+      if (existing) existing.remove();
+    }
     const toast = document.createElement('div');
-    toast.className = 'toast toast-' + type;
-    const icon = type === 'success' ? '✓' : (type === 'error' ? '✗' : '!');
+    toast.className = 'toast toast-' + type + (type === 'info' || type === 'collection-progress' ? ' toast-collection-progress' : '');
+    const icon = type === 'success' ? '✓' : (type === 'error' ? '✗' : type === 'info' ? 'ⓘ' : '!');
     let html = '<strong>' + icon + '</strong><span>' + message + '</span>';
     if (detail) {
       const detailEl = document.createElement('div');
@@ -22,7 +27,9 @@
     }
     toast.innerHTML = html;
     toastContainer.appendChild(toast);
-    setTimeout(function() { toast.remove(); }, 6000);
+    // Info/progress toasts stay longer; error/success fade after 6s
+    const duration = (type === 'info' || type === 'collection-progress') ? 30000 : 6000;
+    toast._autoRemove = setTimeout(function() { toast.remove(); }, duration);
   };
 
   // ─── New Directory Modal ────────────────────────────────────────────────
@@ -75,10 +82,25 @@
     const span = document.createElement('span');
     span.className = 'tag';
     span.textContent = tag;
-    span.onclick = function() { span.remove(); updateHiddenInput(); };
+    span.onclick = function() { span.remove(); updateHiddenInput(); updateAddSearchTermState(); };
     tagContainer.appendChild(span);
     tagInput.value = '';
     updateHiddenInput();
+    updateAddSearchTermState();
+  }
+
+  function updateAddSearchTermState() {
+    // Update the Add button state based on input
+    const addBtn = document.getElementById('add-search-term');
+    const errorEl = document.getElementById('search-terms-error');
+    const tags = tagContainer ? tagContainer.querySelectorAll('.tag') : [];
+    if (addBtn) {
+      addBtn.style.opacity = tagInput.value.trim() ? '1' : '0.5';
+    }
+    // Clear error if tags exist
+    if (tags.length > 0 && errorEl) {
+      errorEl.style.display = 'none';
+    }
   }
 
   if (tagInput && tagContainer) {
@@ -93,6 +115,8 @@
     if (addBtn) {
       addBtn.addEventListener('click', addTag);
     }
+    // Update button state on input
+    tagInput.addEventListener('input', updateAddSearchTermState);
   }
 
   function updateHiddenInput() {
@@ -110,6 +134,16 @@
     createForm.addEventListener('submit', async function(e) {
       e.preventDefault();
       updateHiddenInput();
+
+      // Validate: at least one search term required
+      const tags = tagContainer ? tagContainer.querySelectorAll('.tag') : [];
+      const errorEl = document.getElementById('search-terms-error');
+      if (tags.length === 0) {
+        if (errorEl) errorEl.style.display = 'block';
+        tagInput.focus();
+        return;
+      }
+      if (errorEl) errorEl.style.display = 'none';
 
       // Collect metro checkboxes
       const metroChecks = document.querySelectorAll('input[name="target_metros"]:checked');
@@ -176,11 +210,14 @@
 
   // ─── Run pipeline stage ─────────────────────────────────────────────────
   // Called from the Directory Detail tabs — triggers a script via the runner
+  // The API now runs scripts as background tasks, so we get an immediate
+  // "started" response and poll for completion via the directory API
   window.runPipelineStage = async function(scriptName, directoryId, params) {
     const btn = event ? event.target : null;
     if (btn) {
       btn.disabled = true;
-      btn.textContent = 'Running…';
+      btn.dataset.originalText = btn.textContent;
+      btn.textContent = 'Starting…';
     }
 
     try {
@@ -191,12 +228,14 @@
       });
       const data = await resp.json();
 
-      if (data.status === 'success') {
-        showToast(data.summary || (scriptName + ' completed'), 'success');
-        // Reload the page to pick up new run data
-        setTimeout(function() { window.location.reload(); }, 1000);
+      if (data.status === 'started' || data.status === 'success') {
+        // Start collection progress polling if this is a collection run
+        if (scriptName === 'collection.collect') {
+          startCollectionProgressPolling(directoryId);
+        }
+        showToast(scriptName + ' started', 'success', 'Running in background — progress updates below');
       } else {
-        showToast(scriptName + ' failed', 'error', (data.error || 'Unknown error').substring(0, 500));
+        showToast(scriptName + ' failed', 'error', (data.error || data.detail || 'Unknown error').substring(0, 500));
       }
     } catch(err) {
       showToast('Network error', 'error');
@@ -210,6 +249,9 @@
 
   // ─── Polling for running stages ─────────────────────────────────────────
   let pollInterval = null;
+  let collectionPollInterval = null;
+  let lastProgressPct = -1;
+  let progressToastTimeout = null;
 
   function stopPolling() {
     if (pollInterval) {
@@ -231,13 +273,76 @@
     }, 3000);
   }
 
+  // ─── Collection progress polling ──────────────────────────────────────────
+  // Polls /api/directories/{id}/collection-progress when collection is running.
+  // Shows a persistent toast with live progress (jobs done, places found).
+  function startCollectionProgressPolling(directoryId) {
+    if (collectionPollInterval) {
+      clearInterval(collectionPollInterval);
+    }
+    let progressToast = null;
+
+    function clearProgressToast() {
+      if (progressToastTimeout) {
+        clearTimeout(progressToastTimeout);
+        progressToastTimeout = null;
+      }
+      // Don't remove — keep it until collection is done
+    }
+
+    collectionPollInterval = setInterval(async function() {
+      try {
+        const resp = await fetch('/api/directories/' + directoryId + '/collection-progress');
+        const data = await resp.json();
+
+        // Only update toast while collection is running
+        if (data.project_status === 'running' || data.project_status === 'complete') {
+          const pct = data.total_jobs > 0 ? Math.round((data.complete / data.total_jobs) * 100) : 0;
+
+          // Show toast only when progress changes (avoid spam)
+          if (pct !== lastProgressPct) {
+            lastProgressPct = pct;
+            const msg = 'Collection: ' + data.complete + '/' + data.total_jobs + ' jobs done (' + pct + '%)';
+            const detail = data.complete + ' jobs • ' + data.failed + ' failed • ' + data.places_collected + ' places found • ' + data.running + ' in progress';
+
+            // Show a persistent info toast
+            showToast(msg, 'info', detail);
+          }
+
+          // If collection is complete, stop polling
+          if (data.project_status === 'complete' && data.pending === 0 && data.running === 0) {
+            clearInterval(collectionPollInterval);
+            collectionPollInterval = null;
+            showToast('Collection complete!', 'success', data.places_collected + ' places collected from ' + data.complete + ' jobs');
+          }
+        }
+      } catch(e) {
+        // Silently fail — polling will retry
+      }
+    }, 2000);
+  }
+
   window.startPolling = startPolling;
   window.stopPolling = stopPolling;
+  window.startCollectionProgressPolling = startCollectionProgressPolling;
 
   // Start polling on Directory Detail page
   const dirDetailDirId = typeof DIRECTORY_ID !== 'undefined' ? DIRECTORY_ID : null;
   if (dirDetailDirId) {
     startPolling(dirDetailDirId);
+
+    // If collection is already running, start progress polling so the user
+    // sees live updates even if they navigated to the page after collection started
+    setTimeout(function() {
+      fetch('/api/directories/' + dirDetailDirId + '/collection-progress')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.project_status === 'running' && data.total_jobs > 0) {
+            startCollectionProgressPolling(dirDetailDirId);
+          }
+        })
+        .catch(function() { /* ignore — polling will retry */ });
+    }, 500);
   }
 
   // ─── Expandable log viewer ──────────────────────────────────────────────
@@ -399,190 +504,212 @@
     });
   }
 
-  // ─── Load places on Collect tab ─────────────────────────────────────────
-  function loadPlaces() {
-    const searchInput = document.getElementById('places-search');
-    const completenessInput = document.getElementById('min-completeness');
-    const completenessVal = document.getElementById('completeness-val');
-    const tbody = document.getElementById('places-table-body');
+  // ─── Data tab loaders ───────────────────────────────────────────────────
+  // Each tab has a search input, filter controls, table body, and pagination bar.
+  // Loaders are auto-triggered when the tab is clicked (lazy load).
 
+  var loadedTabs = {};
+
+  function loadDataTable(tabName, options) {
+    var tbody = document.getElementById(tabName + '-table-body');
     if (!tbody) return;
+    var searchInput = document.getElementById(tabName + '-search');
+    var offset = 0;
+    var limit = 100;
+    // Map tab names to API endpoints
+    var endpointMap = {
+      collected: 'places',
+      cleaned: 'cleaned',
+      enriched: 'enriched'
+    };
+    var apiPath = endpointMap[tabName] || tabName;
 
-    async function fetchPlaces() {
-      const search = searchInput ? searchInput.value : '';
-      const minComp = completenessInput ? completenessInput.value : 0;
-      const resp = await fetch('/api/directories/' + DIRECTORY_ID + '/places?search=' + encodeURIComponent(search) + '&min_completeness=' + minComp + '&limit=100');
-      const data = await resp.json();
-      tbody.innerHTML = data.places.map(function(p) {
-        return '<tr><td>' + p.display_name + '</td><td>' + (p.formatted_address || '') + '</td><td>' + (p.data_completeness_score || 0) + '%</td><td>' + (p.search_term || '') + '</td></tr>';
-      }).join('');
+    async function fetchPage() {
+      var search = searchInput ? searchInput.value : '';
+      var params = { search: search, limit: limit, offset: offset };
+      if (options && options.minCompleteness) {
+        params.min_completeness = document.getElementById(tabName + '-completeness').value;
+      }
+      if (options && options.minQuality) {
+        params.min_quality = document.getElementById(tabName + '-quality').value;
+      }
+
+      var qs = Object.keys(params).map(function(k) {
+        return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+      }).join('&');
+
+      try {
+        console.log('fetchPage: fetching ' + apiPath + ' for ' + tabName);
+        var resp = await fetch('/api/directories/' + DIRECTORY_ID + '/' + apiPath + '?' + qs);
+        var data = await resp.json();
+        // Handle both 'places' and 'records' response formats
+        var recs = data.records || data.places || [];
+        tbody.innerHTML = renderTableRows(tabName, recs);
+        renderPagination(tabName, data.total || recs.length, data.limit, data.offset);
+      } catch(e) {
+        tbody.innerHTML = '<tr><td colspan="10" class="loading-row">Error loading data</td></tr>';
+      }
     }
 
-    if (searchInput) searchInput.addEventListener('input', function() { setTimeout(fetchPlaces, 300); });
-    if (completenessInput) completenessInput.addEventListener('input', function() {
-      if (completenessVal) completenessVal.textContent = completenessInput.value + '+';
-      setTimeout(fetchPlaces, 300);
-    });
+    function renderTableRows(tabName, records) {
+      if (tabName === 'collected') {
+        return records.map(function(r) {
+          return '<tr><td>' + (r.display_name || '') + '</td><td>' + (r.formatted_address || '') + '</td><td>' + (r.search_term || '') + '</td><td>' + (r.data_completeness_score || 0) + '%</td><td>' + (r.created_at || '') + '</td></tr>';
+        }).join('') || '<tr><td colspan="5" class="loading-row">No collected places found</td></tr>';
+      }
+      if (tabName === 'cleaned') {
+        return records.map(function(r) {
+          return '<tr><td>' + (r.name || '') + '</td><td>' + (r.address || '') + '</td><td>' + (r.suburb_name || '') + '</td><td>' + (r.state_code || '') + '</td><td>' + (r.data_completeness_score || 0) + '%</td><td>' + (r.phone || '') + '</td><td>' + (r.website || '') + '</td><td>' + (r.rating || '') + '</td></tr>';
+        }).join('') || '<tr><td colspan="8" class="loading-row">No cleaned data yet — run the Clean stage</td></tr>';
+      }
+      if (tabName === 'enriched') {
+        return records.map(function(r) {
+          return '<tr><td>' + (r.name || '') + '</td><td>' + (r.address || '') + '</td><td>' + (r.suburb_name || '') + '</td><td>' + (r.quality_score || 0) + '</td><td>' + (r.phone || '') + '</td><td>' + (r.website || '') + '</td><td>' + (r.rating || '') + '</td><td>' + (r.ai_generated ? '✓' : '—') + '</td></tr>';
+        }).join('') || '<tr><td colspan="8" class="loading-row">No enriched data yet — run the Enrich stage</td></tr>';
+      }
+      return '';
+    }
 
-    fetchPlaces();
+    function renderPagination(tabName, total, lim, off) {
+      var bar = document.getElementById(tabName + '-pagination');
+      if (!bar) return;
+      var start = off + 1;
+      var end = Math.min(off + lim, total);
+      var prevDisabled = off === 0;
+      var nextDisabled = off + lim >= total;
+      var prevBtn = prevDisabled ? '<span class="page-btn disabled">←</span>' : '<button class="page-btn" onclick="loadDataTableNav(\'' + tabName + '\', -1)">←</button>';
+      var nextBtn = nextDisabled ? '<span class="page-btn disabled">→</span>' : '<button class="page-btn" onclick="loadDataTableNav(\'' + tabName + '\', 1)">→</button>';
+      bar.innerHTML = '<span class="page-info">' + (total > 0 ? start + '–' + end + ' of ' + total : 'No results') + '</span>' + prevBtn + nextBtn;
+    }
+
+    // Expose navigation for pagination buttons
+    window.loadDataTableNav = function(tab, direction) {
+      var newOffset = offset + (direction * limit);
+      if (newOffset < 0 || newOffset >= loadedTabs[tab].total) return;
+      offset = newOffset;
+      loadedTabs[tab].offset = offset;
+      fetchPage();
+    };
+
+    // Expose for refresh buttons
+    window.loadDataTableRefresh = function(tab) {
+      offset = 0;
+      loadedTabs[tab].offset = offset;
+      fetchPage();
+    };
+
+    if (searchInput) {
+      searchInput.addEventListener('input', function() { setTimeout(function() { offset = 0; loadedTabs[tabName].offset = 0; fetchPage(); }, 300); });
+    }
+    if (options && options.minCompleteness) {
+      var compInput = document.getElementById(tabName + '-completeness');
+      var compVal = document.getElementById(tabName + '-completeness-val');
+      if (compInput && compVal) {
+        compInput.addEventListener('input', function() {
+          compVal.textContent = this.value + '%';
+          setTimeout(function() { offset = 0; loadedTabs[tabName].offset = 0; fetchPage(); }, 300);
+        });
+      }
+    }
+    if (options && options.minQuality) {
+      var qInput = document.getElementById(tabName + '-quality');
+      var qVal = document.getElementById(tabName + '-quality-val');
+      if (qInput && qVal) {
+        qInput.addEventListener('input', function() {
+          qVal.textContent = this.value + '+';
+          setTimeout(function() { offset = 0; loadedTabs[tabName].offset = 0; fetchPage(); }, 300);
+        });
+      }
+    }
+
+    loadedTabs[tabName] = { offset: offset, total: 0 };
+    console.log('loadDataTable: ' + tabName + ' starting fetchPage');
+    fetchPage();
   }
 
-  loadPlaces();
+  // Lazy-load data when a tab is clicked
+  document.addEventListener('click', function(e) {
+    var tab = e.target.closest('.tab');
+    if (!tab) return;
+    var tabName = tab.dataset.tab;
+    if (tabName === 'collected' && !loadedTabs.collected) {
+      loadDataTable('collected', { minCompleteness: false });
+    }
+    if (tabName === 'cleaned' && !loadedTabs.cleaned) {
+      loadDataTable('cleaned', { minCompleteness: true });
+    }
+    if (tabName === 'enriched' && !loadedTabs.enriched) {
+      loadDataTable('enriched', { minQuality: true });
+    }
+  });
 
-  // ─── Overview: Stage-contextual action buttons ──────────────────────────
-  // Maps current_stage → script_name for the card action button
-  var STAGE_SCRIPT_MAP = {
-    'Idea': 'collection.collect',
-    'Collecting': 'collection.collect',
-    'Cleaning': 'cleaning.clean',
-    'Enriching': 'enrichment.enrich',
-    'Uploading': 'upload.d1',
-    'Deploying': 'deploy.provision',
-    'Live': null,  // no action — "View Live ↗" navigates to detail page
-    'Error': null, // re-run via detail page
-  };
+  // Refresh buttons for data tabs
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    var action = btn.getAttribute('data-action');
+    if (action === 'refresh-collected') { window.loadDataTableRefresh('collected'); }
+    if (action === 'refresh-cleaned') { window.loadDataTableRefresh('cleaned'); }
+    if (action === 'refresh-enriched') { window.loadDataTableRefresh('enriched'); }
+  });
 
-  // Handle card action button clicks on Overview page
+  // Auto-load all data tabs on page load so users see data immediately
+  // without having to click each tab first
+  if (typeof DIRECTORY_ID !== 'undefined') {
+    if (document.getElementById('collected-table-body')) {
+      loadDataTable('collected', { minCompleteness: false });
+    }
+    if (document.getElementById('cleaned-table-body')) {
+      loadDataTable('cleaned', { minCompleteness: true });
+    }
+    if (document.getElementById('enriched-table-body')) {
+      loadDataTable('enriched', { minQuality: true });
+    }
+  }
+
+  // ─── Load places on Collect tab (legacy) ─────────────────────────────────
+
+  // ─── Overview: Card action button (always navigates to detail page) ─────────
+  // Per spec: button label is always "View Project", consistent color, no stage logic
   document.addEventListener('click', function(e) {
     var btn = e.target.closest('.card-action-btn');
     if (!btn) return;
-
     var dirId = btn.dataset.dirId;
-    var stage = btn.dataset.stage;
-    var statusClass = btn.dataset.statusClass;
-
-    // Live → go to detail page; Error → also go to detail page for re-run
-    if (stage === 'Live' || statusClass === 'error') {
+    if (dirId) {
       window.location.href = '/directories/' + dirId;
-      return;
     }
-
-    // For other stages, navigate to the detail page which has the run button
-    window.location.href = '/directories/' + dirId;
   });
 
   // ─── Overview: Search/Filter/Sort ────────────────────────────────────────
-  var dirSearch = document.getElementById('dir-search');
-  var statusFilter = document.getElementById('status-filter');
-  var sortBy = document.getElementById('sort-by');
-  var sortOrder = document.getElementById('sort-order');
-  var projectGrid = document.getElementById('project-grid');
+  // ─── Filter/Sort logic removed — search, filter, and sort dropdowns were removed from the UI ───
 
-  function getQueryParam(name) {
-    var params = new URLSearchParams(window.location.search);
-    return params.get(name) || '';
-  }
-
-  function setQueryParam(name, value) {
-    var params = new URLSearchParams(window.location.search);
-    if (value) {
-      params.set(name, value);
-    } else {
-      params.delete(name);
-    }
-    var qs = params.toString();
-    var url = qs ? window.location.pathname + '?' + qs : window.location.pathname;
-    window.history.replaceState({}, '', url);
-  }
-
-  function applyFilters() {
-    if (!projectGrid) return;
-
-    var searchTerm = dirSearch ? dirSearch.value.toLowerCase() : '';
-    var statusVal = statusFilter ? statusFilter.value : '';
-    var sortByVal = sortBy ? sortBy.value : 'updated_at';
-    var sortOrderVal = sortOrder ? sortOrder.value : 'desc';
-
-    // Sync URL params
-    setQueryParam('search', searchTerm);
-    if (statusVal) setQueryParam('status', statusVal); else setQueryParam('status', '');
-    setQueryParam('sort_by', sortByVal);
-    setQueryParam('sort_order', sortOrderVal);
-
-    var cards = Array.from(projectGrid.querySelectorAll('.project-card'));
-    cards.forEach(function(card) {
-      var name = card.querySelector('.project-card-name').textContent.toLowerCase();
-      var stage = card.dataset.currentStage.toLowerCase();
-      var statusClass = card.dataset.statusClass;
-      var updatedAt = card.querySelector('.updated').textContent;
-
-      // Search filter
-      var matchesSearch = !searchTerm || name.indexOf(searchTerm) !== -1;
-
-      // Status filter
-      var matchesStatus = !statusVal || statusClass === statusVal;
-
-      card.style.display = (matchesSearch && matchesStatus) ? '' : 'none';
-    });
-
-    // Sort
-    var visibleCards = cards.filter(function(c) { return c.style.display !== 'none'; });
-    visibleCards.sort(function(a, b) {
-      var aVal, bVal;
-      if (sortByVal === 'name') {
-        aVal = a.querySelector('.project-card-name').textContent;
-        bVal = b.querySelector('.project-card-name').textContent;
-      } else if (sortByVal === 'place_count') {
-        aVal = parseInt(a.querySelector('.count').textContent) || 0;
-        bVal = parseInt(b.querySelector('.count').textContent) || 0;
-      } else if (sortByVal === 'current_stage') {
-        aVal = a.dataset.currentStage;
-        bVal = b.dataset.currentStage;
+  // ─── Top bar hamburger toggle (mobile) ─────────────────────────────────────
+  var hamburger = document.getElementById('hamburger');
+  var topBarNav = document.getElementById('top-bar-nav');
+  var navOverlay = document.getElementById('nav-overlay');
+  if (hamburger && topBarNav && navOverlay) {
+    function toggleNav() {
+      var open = topBarNav.classList.contains('open');
+      if (open) {
+        topBarNav.classList.remove('open');
+        hamburger.classList.remove('open');
+        hamburger.setAttribute('aria-expanded', 'false');
+        navOverlay.classList.remove('active');
       } else {
-        aVal = a.querySelector('.updated').textContent;
-        bVal = b.querySelector('.updated').textContent;
+        topBarNav.classList.add('open');
+        hamburger.classList.add('open');
+        hamburger.setAttribute('aria-expanded', 'true');
+        navOverlay.classList.add('active');
       }
-
-      if (typeof aVal === 'string' && typeof bVal === 'string') {
-        return sortOrderVal === 'desc'
-          ? bVal.localeCompare(aVal)
-          : aVal.localeCompare(bVal);
-      } else {
-        return sortOrderVal === 'desc' ? bVal - aVal : aVal - bVal;
+    }
+    hamburger.addEventListener('click', toggleNav);
+    navOverlay.addEventListener('click', toggleNav);
+    // Close menu when a nav link is clicked
+    topBarNav.addEventListener('click', function(e) {
+      if (e.target.tagName === 'A') {
+        toggleNav();
       }
     });
-
-    // Re-append in sorted order
-    visibleCards.forEach(function(card) {
-      projectGrid.appendChild(card);
-    });
-  }
-
-  // Initialize filter controls from URL params
-  if (dirSearch) {
-    var urlSearch = getQueryParam('search');
-    if (urlSearch) dirSearch.value = urlSearch;
-    dirSearch.addEventListener('input', function() { setTimeout(applyFilters, 300); });
-  }
-
-  if (statusFilter) {
-    var urlStatus = getQueryParam('status');
-    if (urlStatus) statusFilter.value = urlStatus;
-    statusFilter.addEventListener('change', applyFilters);
-  }
-
-  if (sortBy) {
-    var urlSort = getQueryParam('sort_by');
-    if (urlSort) sortBy.value = urlSort;
-    sortBy.addEventListener('change', applyFilters);
-  }
-
-  if (sortOrder) {
-    var urlOrder = getQueryParam('sort_order');
-    if (urlOrder) sortOrder.value = urlOrder;
-    sortOrder.addEventListener('change', applyFilters);
-  }
-
-  // Apply URL-based filters on page load
-  if (projectGrid) {
-    var urlSearchTerm = getQueryParam('search');
-    if (urlSearchTerm) {
-      var cards = projectGrid.querySelectorAll('.project-card');
-      cards.forEach(function(card) {
-        var name = card.querySelector('.project-card-name').textContent.toLowerCase();
-        card.style.display = name.indexOf(urlSearchTerm.toLowerCase()) !== -1 ? '' : 'none';
-      });
-    }
   }
 
 })();
