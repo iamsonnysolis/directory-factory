@@ -17,3 +17,4 @@ fix_*.py
 fix_*.txt
 patch_css.py
 near-me-directory/
+.hermes/
