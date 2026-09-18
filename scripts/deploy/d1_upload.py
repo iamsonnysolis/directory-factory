@@ -5,7 +5,7 @@ and uploads them into a per-directory Cloudflare D1 database via the
 Cloudflare REST API, using the exact schema defined in ``Data-Model-Spec.md``.
 
 Per the architecture decision in the plan doc, **one D1 database per
-directory** — credentials are in ``.env`` (``CLOUDDFLARE_API_TOKEN``,
+directory** — credentials are in ``.env`` (``CLOUDFLARE_API_TOKEN``,
 ``CLOUDFLARE_ACCOUNT_ID``) and the D1 database ID is auto-created on first
 upload and persisted to ``.env`` for subsequent runs.
 
@@ -731,6 +731,9 @@ def upload_project(project_id: int, params: dict) -> dict:
     dep_statements = []          # features/hours/services (need business_id)
     content_statements = []      # content rows (content last)
     site_config_statements = []  # site_config rows
+
+    # 1. Schema (CREATE TABLE IF NOT EXISTS — must come first!)
+    all_statements.append(build_schema_sql())
 
     # 2. site_config
     site_config_statements = build_site_config_upserts(site_name, params)
