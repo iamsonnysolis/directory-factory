@@ -128,18 +128,21 @@ def is_24_hours(opening_hours: Any) -> bool:
     # Raw string check (enrich.js style)
     if isinstance(opening_hours, str):
         return "24 hour" in opening_hours.lower()
-    # Google Places structured format
+    # Google Places structured format (supports both API v3 and v4 field layouts)
     if isinstance(opening_hours, dict):
         # Check for 24-hour periods in Google's structured opening hours
         periods = opening_hours.get("periods", [])
         if periods:
             for p in periods:
-                if p.get("openDay") is not None and p.get("closeDay") is not None:
-                    # If open and close are on the same day and span the full day,
-                    # it's 24 hours
-                    if p.get("openHour", 24) == 0 and p.get("closeHour", 0) == 0:
-                        # 00:00 open → 00:00 close next day = 24h
-                        return True
+                # API (New): {"open": {"day": 0, ...}, "close": {"day": 0, ...}}
+                # API (Old): {"openDay": 0, ...}
+                open_info = p.get("open", {})
+                close_info = p.get("close", {})
+                open_hour = open_info.get("hour", 24) if open_info else p.get("openHour", 24)
+                close_hour = close_info.get("hour", 0) if close_info else p.get("closeHour", 0)
+                if open_hour == 0 and close_hour == 0:
+                    # 00:00 open → 00:00 close = 24h
+                    return True
         # Fallback: check raw string if present
         raw = opening_hours.get("raw", "")
         if raw and "24 hour" in raw.lower():
@@ -453,12 +456,16 @@ def parse_google_opening_hours(regular_opening_hours: dict) -> list[dict]:
     rows = []
     periods = regular_opening_hours.get("periods", [])
     for p in periods:
-        open_day = p.get("openDay")
-        close_day = p.get("closeDay")
-        open_hour = p.get("openHour", 0)
-        open_minute = p.get("openMinute", 0)
-        close_hour = p.get("closeHour", 0)
-        close_minute = p.get("closeMinute", 0)
+        # API (New): {"open": {"day": 1, "hour": 9, "minute": 0}, "close": {...}}
+        # API (Old): {"openDay": 1, "openHour": 9, "openMinute": 0, ...}
+        open_info = p.get("open", {})
+        close_info = p.get("close", {})
+        open_day = open_info.get("day") if open_info else p.get("openDay")
+        close_day = close_info.get("day") if close_info else p.get("closeDay")
+        open_hour = open_info.get("hour", 0) if open_info else p.get("openHour", 0)
+        open_minute = open_info.get("minute", 0) if open_info else p.get("openMinute", 0)
+        close_hour = close_info.get("hour", 0) if close_info else p.get("closeHour", 0)
+        close_minute = close_info.get("minute", 0) if close_info else p.get("closeMinute", 0)
 
         open_mins = open_hour * 60 + open_minute
         close_mins = close_hour * 60 + close_minute
@@ -807,14 +814,22 @@ def clean_place(raw_json: dict) -> dict:
         if periods:
             parts = []
             for p in periods[:7]:
-                open_day = p.get("openDay")
+                # API (New): {"open": {"day": 0, "hour": 7, "minute": 0}, "close": {...}}
+                # API (Old): {"openDay": 0, "openHour": 7, ...}
+                open_info = p.get("open", {})
+                open_day = open_info.get("day") if open_info else p.get("openDay")
                 if open_day is not None:
                     day_name = GOOGLE_DAY_NAMES[open_day % 7] if open_day < 7 else "?"
                     oh_parts = []
-                    if p.get("openHour") is not None:
-                        oh_parts.append(f"{p['openHour']:02d}:{p.get('openMinute', 0):02d}")
-                    if p.get("closeHour") is not None:
-                        oh_parts.append(f"{p['closeHour']:02d}:{p.get('closeMinute', 0):02d}")
+                    open_hour = open_info.get("hour") if open_info else p.get("openHour")
+                    open_minute = open_info.get("minute", 0) if open_info else p.get("openMinute", 0)
+                    if open_hour is not None:
+                        oh_parts.append(f"{open_hour:02d}:{open_minute:02d}")
+                    close_info = p.get("close", {})
+                    close_hour = close_info.get("hour") if close_info else p.get("closeHour")
+                    if close_hour is not None:
+                        close_minute = close_info.get("minute", 0) if close_info else p.get("closeMinute", 0)
+                        oh_parts.append(f"{close_hour:02d}:{close_minute:02d}")
                     time_str = "-".join(oh_parts) if oh_parts else "open"
                     parts.append(f"{day_name}: {time_str}")
             opening_hours_raw = "; ".join(parts)

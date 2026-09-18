@@ -26,6 +26,7 @@ KEY_FIELDS = [
 
 def _get_fields_for_tier(tier: str) -> list[str]:
     """Get cumulative fields for a tier from FIELD_TIERS config."""
+    tier = (tier or "").lower()
     fields = []
     if tier == "pro":
         fields = FIELD_TIERS["essentials"] + FIELD_TIERS["pro"]
@@ -152,13 +153,30 @@ class GooglePlacesClient:
             headers=self._get_search_headers(field_tier_override=field_tier_override),
             json=request_body
         )
-        response.raise_for_status()
+        if response.status_code != 200:
+            # Read the response body for error details
+            try:
+                err_body = response.json()
+                err_msg = err_body.get("error", {}).get("message", response.text[:500])
+                err_status = err_body.get("error", {}).get("status", "")
+            except Exception:
+                err_body = response.text[:500]
+                err_msg = str(err_body)
+                err_status = ""
+            print(f"[google_places] API error {response.status_code} ({err_status}): {err_msg}")
+            response.raise_for_status()
+
+        # Check for error in a 200 response (some Google API errors return 200)
+        data = response.json()
+        if "error" in data:
+            err = data["error"]
+            print(f"[google_places] API returned error in 200 response: "
+                  f"code={err.get('code', 'N/A')} message={err.get('message', 'N/A')}")
         
         # Defensive: handle missing 'places' key
-        data = response.json()
         if "places" not in data:
             data["places"] = []
-        
+
         return data
     
     async def place_details(self, place_id: str, field_tier_override: Optional[str] = None) -> Optional[dict]:
@@ -204,15 +222,34 @@ class GooglePlacesClient:
                 self._consecutive_429s = 0
                 
             except httpx.HTTPStatusError as e:
-                if e.response.status_code == 429:
+                status_code = e.response.status_code
+                # Try to extract the JSON error body for context
+                try:
+                    err_detail = e.response.json()
+                    err_msg = err_detail.get("error", {}).get("message", str(e)[:300])
+                    err_status = err_detail.get("error", {}).get("status", "")
+                except Exception:
+                    err_msg = str(e)[:300]
+                    err_status = ""
+                
+                if status_code == 429:
                     self._consecutive_429s += 1
-                    # Log the rate limit hit so it shows in collection progress
-                    print(f"[google_places] 429 rate limit hit, retrying (attempt {self._consecutive_429s})")
+                    # Check for specific error subtypes
+                    if "daily limit" in err_msg.lower() or "quota exceeded" in err_msg.lower():
+                        print(f"[google_places] DAILY QUOTA EXHAUSTED — collection will not succeed until quota resets. "
+                              f"Error: {err_msg}")
+                    elif "rate limit" in err_msg.lower():
+                        print(f"[google_places] Rate limit hit (attempt {self._consecutive_429s}), retrying after backoff. "
+                              f"Error: {err_msg}")
+                    else:
+                        print(f"[google_places] 429 rate limit hit (attempt {self._consecutive_429s}), retrying. "
+                              f"Error: {err_msg}")
                     continue  # Retry after sleep
-                # Log error but continue - we'll track failed pages elsewhere
-                print(f"[google_places] HTTP {e.response.status_code}: {str(e)[:200]}")
+                # Other HTTP errors
+                print(f"[google_places] HTTP {status_code} ({err_status}): {err_msg}")
                 break
             except Exception as e:
+                print(f"[google_places] Unexpected error: {type(e).__name__}: {str(e)[:300]}")
                 break
             
             page_token = result.get("nextPageToken")

@@ -5,9 +5,9 @@ and uploads them into a per-directory Cloudflare D1 database via the
 Cloudflare REST API, using the exact schema defined in ``Data-Model-Spec.md``.
 
 Per the architecture decision in the plan doc, **one D1 database per
-directory** — credentials are NOT in ``.env`` but passed at runtime
-as params (D1_ACCOUNT_ID, D1_DATABASE_ID). The Cloudflare API token
-comes from the environment (``CLOUDFLARE_API_TOKEN``).
+directory** — credentials are in ``.env`` (``CLOUDFLARE_API_TOKEN``,
+``CLOUDFLARE_ACCOUNT_ID``) and the D1 database ID is auto-created on first
+upload and persisted to a per-project config file (``data/<project_id>/d1_database_id``).
 
 **Upload order (FK-safe, per Data-Model-Spec.md):**
   states → regions → suburbs → businesses →
@@ -64,7 +64,157 @@ _SCHEMA_PATH = os.path.join(_SCRIPTS_DIR, "deploy", "d1_schema.sql")
 D1_API_BASE = "https://api.cloudflare.com/client/v4"
 
 
+# ─── Cloudflare D1 Database Management ────────────────────────────────────────
+
+def d1_create_database(
+    account_id: str,
+    database_name: str,
+    api_token: str | None = None,
+) -> str:
+    """Create a new Cloudflare D1 database.
+
+    Uses the ``/accounts/{account_id}/d1/database`` endpoint.
+
+    Args:
+        account_id: Cloudflare account ID.
+        database_name: Name for the new D1 database (e.g. ``directory-factory-89``).
+        api_token: Cloudflare API token. Falls back to
+            ``CLOUDFLARE_API_TOKEN`` env var.
+
+    Returns:
+        The UUID of the newly created D1 database.
+
+    Raises:
+        RuntimeError on API-level errors or missing token.
+        requests.HTTPError on non-2xx responses.
+    """
+    token = api_token or os.getenv("CLOUDFLARE_API_TOKEN")
+    if not token:
+        raise RuntimeError(
+            "CLOUDFLARE_API_TOKEN environment variable is not set. "
+            "Pass it as params.d1_api_token, or set the env var. "
+            "Requires D1 write access."
+        )
+
+    url = f"{D1_API_BASE}/accounts/{account_id}/d1/database"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "name": database_name,
+    }
+
+    resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    if not resp.ok:
+        raise RuntimeError(
+            f"Cloudflare D1 create-database failed "
+            f"({resp.status_code}): {resp.text}"
+        )
+    resp.raise_for_status()
+    data = resp.json()
+
+    result = data.get("result", {})
+    db_info = result.get("database", result)
+    db_uuid = db_info.get("uuid") or db_info.get("id")
+    if not db_uuid:
+        raise RuntimeError(f"Unexpected API response — no UUID in result: {data}")
+
+    logger.info(f"Created D1 database '{database_name}' with UUID {db_uuid}")
+    return db_uuid
+
+
+def d1_database_exists(
+    account_id: str,
+    database_id: str,
+    api_token: str | None = None,
+) -> bool:
+    """Check if a D1 database exists by listing all databases and matching UUID.
+
+    Uses the ``/accounts/{account_id}/d1/database`` GET endpoint.
+
+    Args:
+        account_id: Cloudflare account ID.
+        database_id: D1 database UUID to look for.
+        api_token: Cloudflare API token.
+
+    Returns:
+        True if the database exists, False otherwise.
+    """
+    token = api_token or os.getenv("CLOUDFLARE_API_TOKEN")
+    if not token:
+        raise RuntimeError("CLOUDFLARE_API_TOKEN environment variable is not set.")
+
+    url = f"{D1_API_BASE}/accounts/{account_id}/d1/database"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    resp = requests.get(url, headers=headers, timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+
+    if not data.get("success"):
+        return False
+
+    databases = data.get("result", [])
+    for db in databases:
+        if db.get("uuid") == database_id or db.get("id") == database_id:
+            return True
+    return False
+
+
 # ─── Cloudflare D1 API ─────────────────────────────────────────────────────────
+def d1_find_database_by_name(
+    account_id: str,
+    database_name: str,
+    api_token: str | None = None,
+) -> str | None:
+    """Find a D1 database UUID by name (case-sensitive match).
+
+    Lists all D1 databases in the account and returns the UUID of the
+    first one whose ``name`` matches. Returns ``None`` if no match is found.
+
+    Args:
+        account_id: Cloudflare account ID.
+        database_name: Database name to search for.
+        api_token: Cloudflare API token. Falls back to
+            ``CLOUDFLARE_API_TOKEN`` env var.
+
+    Returns:
+        The database UUID (string) if found, otherwise ``None``.
+    """
+    token = api_token or os.getenv("CLOUDFLARE_API_TOKEN")
+    if not token:
+        raise RuntimeError("CLOUDFLARE_API_TOKEN environment variable is not set.")
+
+    url = f"{D1_API_BASE}/accounts/{account_id}/d1/database"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    resp = requests.get(url, headers=headers, timeout=60)
+    if not resp.ok:
+        raise RuntimeError(
+            f"Cloudflare D1 list-databases failed "
+            f"({resp.status_code}): {resp.text}"
+        )
+    resp.raise_for_status()
+    data = resp.json()
+
+    if not data.get("success"):
+        return None
+
+    databases = data.get("result", [])
+    for db in databases:
+        if db.get("name") == database_name:
+            uuid = db.get("uuid") or db.get("id")
+            if uuid:
+                return str(uuid)
+    return None
+
 
 def d1_execute(
     account_id: str,
@@ -74,8 +224,8 @@ def d1_execute(
 ) -> list:
     """Execute SQL statements against a Cloudflare D1 database via REST API.
 
-    Uses the ``/accounts/{account_id}/d1/database/{database_id}/execute``
-    endpoint which accepts a JSON payload with ``jsonql_statements`` key.
+    Uses the ``/accounts/{account_id}/d1/database/{database_id}/query``
+    endpoint which accepts a JSON payload with ``sql`` and ``batch`` keys.
 
     Args:
         account_id: Cloudflare account ID.
@@ -101,20 +251,25 @@ def d1_execute(
             "Requires D1 write access."
         )
 
-    url = f"{D1_API_BASE}/accounts/{account_id}/d1/database/{database_id}/execute"
+    url = f"{D1_API_BASE}/accounts/{account_id}/d1/database/{database_id}/query"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    payload = {"jsonql_statements": sql_statements}
+    payload = {"sql": sql_statements, "batch": []}
 
     resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    if not resp.ok:
+        raise RuntimeError(
+            f"Cloudflare D1 execute failed "
+            f"({resp.status_code}) for SQL: {sql_statements[:200]}...: {resp.text}"
+        )
     resp.raise_for_status()
     data = resp.json()
 
     if not data.get("success"):
         errors = data.get("errors", [])
-        raise RuntimeError(f"Cloudflare API error: {errors}")
+        raise RuntimeError(f"Cloudflare API error executing SQL: {errors}")
 
     result = data.get("result", [])
     # D1 returns result as an array of statement results:
@@ -342,8 +497,8 @@ def build_business_upsert_sql(record: dict) -> str:
         sql_str(record.get("address") or record.get("formatted_address")),
         sql_str(record.get("state_code")),
         sql_str(record.get("postal_code")),
-        sql_str(record.get("lat") or record.get("latitude")),
-        sql_str(record.get("lng") or record.get("longitude")),
+        sql_str(record.get("lat") or record.get("latitude") or 0.0),
+        sql_str(record.get("lng") or record.get("longitude") or 0.0),
         sql_str(record.get("phone") or record.get("national_phone")),
         sql_str(record.get("website")),
         sql_str(record.get("is_mobile_service", False)),
@@ -499,6 +654,37 @@ def resolve_ids_placeholder(slugs_sql: str) -> str:
 
 # ─── Main upload logic ─────────────────────────────────────────────────────────
 
+def _project_d1_config_path(project_id: int) -> str:
+    """Returns the per-project D1 config file path for storing the database UUID."""
+    return os.path.join(_DATA_DIR, str(project_id), "d1_database_id")
+
+
+def _save_database_id_to_project(project_id: int, database_id: str) -> None:
+    """Persists a created D1 database UUID to a per-project config file.
+
+    Uses ``data/<project_id>/d1_database_id`` so each directory has its own
+    database UUID (one D1 database per directory, per the architecture decision).
+    """
+    config_path = _project_d1_config_path(project_id)
+    config_dir = os.path.dirname(config_path)
+    os.makedirs(config_dir, exist_ok=True)
+    with open(config_path, "w") as f:
+        f.write(database_id)
+    logger.info(f"Persisted D1_DATABASE_ID={database_id} to {config_path}")
+
+
+def _load_database_id_from_project(project_id: int) -> str | None:
+    """Reads the D1 database UUID from the per-project config file.
+
+    Returns None if the file doesn't exist.
+    """
+    config_path = _project_d1_config_path(project_id)
+    if os.path.isfile(config_path):
+        with open(config_path) as f:
+            return f.read().strip()
+    return None
+
+
 def upload_project(project_id: int, params: dict) -> dict:
     """Upload enriched records to a per-directory D1 database.
 
@@ -507,8 +693,11 @@ def upload_project(project_id: int, params: dict) -> dict:
             ``data/<project_id>/enriched/*.jsonl`` files to read).
         params: Must include:
             - ``d1_account_id``: Cloudflare account ID
-            - ``d1_database_id``: D1 database ID
             - ``site_name``: Brand name for the directory
+        Optional params:
+            - ``d1_database_id``: D1 database UUID. If not provided, a new D1
+              database is auto-created and the UUID is saved to a per-project
+              config file (``data/<project_id>/d1_database_id``).
             - ``d1_api_token``: (optional) Cloudflare API token. If not
               provided, falls back to ``CLOUDFLARE_API_TOKEN`` env var.
         Optional params:
@@ -520,15 +709,18 @@ def upload_project(project_id: int, params: dict) -> dict:
     """
     # ── Validate required params ─────────────────────────────────────────────
     dry_run = params.get("dry_run", False)
-    account_id = params.get("d1_account_id")
+    account_id = params.get("d1_account_id") or os.getenv("CLOUDFLARE_ACCOUNT_ID")
+    # ── Resolve database_id: params → project config → .env → auto-create ──
     database_id = params.get("d1_database_id")
+    if not database_id:
+        database_id = _load_database_id_from_project(project_id)
+    if not database_id:
+        database_id = os.getenv("D1_DATABASE_ID")  # fallback: .env shared var
     site_name = params.get("site_name", "Directory Factory")
 
     if not dry_run:
         if not account_id:
             raise ValueError("params.d1_account_id is required (Cloudflare account ID)")
-        if not database_id:
-            raise ValueError("params.d1_database_id is required (D1 database ID)")
         if not site_name:
             raise ValueError("params.site_name is required (directory branding name)")
 
@@ -538,6 +730,31 @@ def upload_project(project_id: int, params: dict) -> dict:
             "No Cloudflare API token available. Pass params.d1_api_token or set "
             "CLOUDFLARE_API_TOKEN env var."
         )
+
+    # ── If no database_id, create a new D1 database ─────────────────────────
+    # User should not need to pre-create the database — the upload step handles it.
+    # Database name is derived from site_slug or site_name + project_id.
+    if not dry_run and not database_id:
+        assert account_id  # validated above for non-dry-run
+        site_slug = params.get("site_slug") or site_name.lower().replace(" ", "-").replace("_", "-")
+        db_name = f"d1-{site_slug}-{project_id}"
+        logger.info(f"No D1_DATABASE_ID found — checking for existing D1 database '{db_name}'")
+        # Try to find an existing database with the same name first (idempotent re-runs)
+        database_id = d1_find_database_by_name(account_id, db_name, api_token)
+        if database_id:
+            logger.info(f"Found existing D1 database '{db_name}' (UUID: {database_id})")
+        else:
+            logger.info(f"Creating new D1 database '{db_name}'")
+            database_id = d1_create_database(account_id, db_name, api_token)
+            logger.info(f"Created new D1 database '{db_name}' (UUID: {database_id})")
+        _save_database_id_to_project(project_id, database_id)
+
+    # At this point database_id is guaranteed to be set for real runs
+    # (created above if missing). In dry-run mode it can be None.
+    if not dry_run:
+        if not database_id:
+            raise ValueError("database_id is required and could not be resolved or created")
+        database_id = str(database_id)
 
     # ── Read per-table enriched JSONL ─────────────────────────────────────────
     enriched_dir = os.path.join(_DATA_DIR, str(project_id), "enriched")
@@ -577,6 +794,9 @@ def upload_project(project_id: int, params: dict) -> dict:
     content_statements = []      # content rows (content last)
     site_config_statements = []  # site_config rows
 
+    # 1. Schema (CREATE TABLE IF NOT EXISTS — must come first!)
+    all_statements.append(build_schema_sql())
+
     # 2. site_config
     site_config_statements = build_site_config_upserts(site_name, params)
     all_statements.extend(site_config_statements)
@@ -591,10 +811,10 @@ def upload_project(project_id: int, params: dict) -> dict:
         biz_count = st.get("business_count", 0)
         now = datetime.now(timezone.utc).isoformat()
         stmt = (
-            f"INSERT INTO states (code, name, slug, business_count, updated_at) "
-            f"VALUES ({sql_str(code)}, {sql_str(name)}, {sql_str(slug)}, {sql_str(biz_count)}, {sql_str(now)}) "
+            f"INSERT INTO states (code, name, slug, business_count) "
+            f"VALUES ({sql_str(code)}, {sql_str(name)}, {sql_str(slug)}, {sql_str(biz_count)}) "
             f"ON CONFLICT(code) DO UPDATE SET name=excluded.name, slug=excluded.slug, "
-            f"business_count=excluded.business_count, updated_at=excluded.updated_at"
+            f"business_count=excluded.business_count"
         )
         all_statements.append(stmt)
 
@@ -608,10 +828,10 @@ def upload_project(project_id: int, params: dict) -> dict:
         biz_count = reg.get("business_count", 0)
         now = datetime.now(timezone.utc).isoformat()
         stmt = (
-            f"INSERT INTO regions (slug, state_code, name, business_count, updated_at) "
-            f"VALUES ({sql_str(slug)}, {sql_str(state_code)}, {sql_str(name)}, {sql_str(biz_count)}, {sql_str(now)}) "
+            f"INSERT INTO regions (slug, state_code, name, business_count) "
+            f"VALUES ({sql_str(slug)}, {sql_str(state_code)}, {sql_str(name)}, {sql_str(biz_count)}) "
             f"ON CONFLICT(slug, state_code) DO UPDATE SET name=excluded.name, "
-            f"business_count=excluded.business_count, updated_at=excluded.updated_at"
+            f"business_count=excluded.business_count"
         )
         all_statements.append(stmt)
 
@@ -626,11 +846,10 @@ def upload_project(project_id: int, params: dict) -> dict:
         biz_count = sub.get("business_count", 0)
         now = datetime.now(timezone.utc).isoformat()
         stmt = (
-            f"INSERT INTO suburbs (slug, state_code, name, postcode, business_count, updated_at) "
-            f"VALUES ({sql_str(slug)}, {sql_str(state_code)}, {sql_str(name)}, {sql_str(postcode)}, {sql_str(biz_count)}, {sql_str(now)}) "
+            f"INSERT INTO suburbs (slug, state_code, name, postcode, business_count) "
+            f"VALUES ({sql_str(slug)}, {sql_str(state_code)}, {sql_str(name)}, {sql_str(postcode)}, {sql_str(biz_count)}) "
             f"ON CONFLICT(slug, state_code) DO UPDATE SET name=excluded.name, "
-            f"postcode=excluded.postcode, business_count=excluded.business_count, "
-            f"updated_at=excluded.updated_at"
+            f"postcode=excluded.postcode, business_count=excluded.business_count"
         )
         all_statements.append(stmt)
 
@@ -698,12 +917,12 @@ def upload_project(project_id: int, params: dict) -> dict:
 
     # Get geography ids (state code, region slug+state_code, suburb slug+state_code)
     geo_lookup = d1_execute(account_id, database_id,
-        "SELECT id, code FROM states; "
+        "SELECT code FROM states; "
         "SELECT id, slug, state_code FROM regions; "
         "SELECT id, slug, state_code FROM suburbs;",
         api_token)
 
-    state_id_map = {}   # code → id
+    state_id_map = {}    # code → code (states uses code as PK, no id column)
     region_id_map = {}  # (slug, state_code) → id
     suburb_id_map = {}  # (slug, state_code) → id
 
@@ -718,8 +937,8 @@ def upload_project(project_id: int, params: dict) -> dict:
             for row in results:
                 if not isinstance(row, dict):
                     continue
-                if idx == 0:  # states
-                    state_id_map[row["code"]] = row["id"]
+                if idx == 0:  # states — code is the primary key
+                    state_id_map[row["code"]] = row["code"]
                 elif idx == 1:  # regions
                     region_id_map[(row["slug"], row["state_code"])] = row["id"]
                 elif idx == 2:  # suburbs
@@ -734,8 +953,8 @@ def upload_project(project_id: int, params: dict) -> dict:
         updates = []
 
         state_code = record.get("state_code")
-        if state_code and state_code in state_id_map:
-            updates.append(f"state_id = {state_id_map[state_code]}")
+        # states.code is a direct TEXT FK on businesses (no state_id column),
+        # so no UPDATE is needed here — it was set via INSERT.
 
         region_slug = record.get("region_slug")
         if region_slug and state_code and (region_slug, state_code) in region_id_map:
@@ -908,10 +1127,11 @@ def main(project_id: int, params: dict) -> dict:
 
     Params (required):
         d1_account_id   — Cloudflare account ID
-        d1_database_id  — D1 database ID for this directory
         site_name       — Brand name for the directory
 
     Params (optional):
+        d1_database_id  — D1 database ID. If not provided, a new D1 database
+                          is auto-created (named d1-{site_slug}-{project_id})
         d1_api_token    — Cloudflare API token (default: env CLOUDFLARE_API_TOKEN)
         site_slug       — URL-safe slug for the site
         niche_label     — e.g. "Mobile Dog Groomers"
