@@ -7,7 +7,7 @@ Cloudflare REST API, using the exact schema defined in ``Data-Model-Spec.md``.
 Per the architecture decision in the plan doc, **one D1 database per
 directory** — credentials are in ``.env`` (``CLOUDFLARE_API_TOKEN``,
 ``CLOUDFLARE_ACCOUNT_ID``) and the D1 database ID is auto-created on first
-upload and persisted to ``.env`` for subsequent runs.
+upload and persisted to a per-project config file (``data/<project_id>/d1_database_id``).
 
 **Upload order (FK-safe, per Data-Model-Spec.md):**
   states → regions → suburbs → businesses →
@@ -103,16 +103,16 @@ def d1_create_database(
     }
     payload = {
         "name": database_name,
-        "location": "enamld",
     }
 
     resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    if not resp.ok:
+        raise RuntimeError(
+            f"Cloudflare D1 create-database failed "
+            f"({resp.status_code}): {resp.text}"
+        )
     resp.raise_for_status()
     data = resp.json()
-
-    if not data.get("success"):
-        errors = data.get("errors", [])
-        raise RuntimeError(f"Cloudflare API error creating database: {errors}")
 
     result = data.get("result", {})
     db_info = result.get("database", result)
@@ -166,6 +166,55 @@ def d1_database_exists(
 
 
 # ─── Cloudflare D1 API ─────────────────────────────────────────────────────────
+def d1_find_database_by_name(
+    account_id: str,
+    database_name: str,
+    api_token: str | None = None,
+) -> str | None:
+    """Find a D1 database UUID by name (case-sensitive match).
+
+    Lists all D1 databases in the account and returns the UUID of the
+    first one whose ``name`` matches. Returns ``None`` if no match is found.
+
+    Args:
+        account_id: Cloudflare account ID.
+        database_name: Database name to search for.
+        api_token: Cloudflare API token. Falls back to
+            ``CLOUDFLARE_API_TOKEN`` env var.
+
+    Returns:
+        The database UUID (string) if found, otherwise ``None``.
+    """
+    token = api_token or os.getenv("CLOUDFLARE_API_TOKEN")
+    if not token:
+        raise RuntimeError("CLOUDFLARE_API_TOKEN environment variable is not set.")
+
+    url = f"{D1_API_BASE}/accounts/{account_id}/d1/database"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    resp = requests.get(url, headers=headers, timeout=60)
+    if not resp.ok:
+        raise RuntimeError(
+            f"Cloudflare D1 list-databases failed "
+            f"({resp.status_code}): {resp.text}"
+        )
+    resp.raise_for_status()
+    data = resp.json()
+
+    if not data.get("success"):
+        return None
+
+    databases = data.get("result", [])
+    for db in databases:
+        if db.get("name") == database_name:
+            uuid = db.get("uuid") or db.get("id")
+            if uuid:
+                return str(uuid)
+    return None
+
 
 def d1_execute(
     account_id: str,
@@ -175,8 +224,8 @@ def d1_execute(
 ) -> list:
     """Execute SQL statements against a Cloudflare D1 database via REST API.
 
-    Uses the ``/accounts/{account_id}/d1/database/{database_id}/execute``
-    endpoint which accepts a JSON payload with ``jsonql_statements`` key.
+    Uses the ``/accounts/{account_id}/d1/database/{database_id}/query``
+    endpoint which accepts a JSON payload with ``sql`` and ``batch`` keys.
 
     Args:
         account_id: Cloudflare account ID.
@@ -202,20 +251,25 @@ def d1_execute(
             "Requires D1 write access."
         )
 
-    url = f"{D1_API_BASE}/accounts/{account_id}/d1/database/{database_id}/execute"
+    url = f"{D1_API_BASE}/accounts/{account_id}/d1/database/{database_id}/query"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    payload = {"jsonql_statements": sql_statements}
+    payload = {"sql": sql_statements, "batch": []}
 
     resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    if not resp.ok:
+        raise RuntimeError(
+            f"Cloudflare D1 execute failed "
+            f"({resp.status_code}): {resp.text}"
+        )
     resp.raise_for_status()
     data = resp.json()
 
     if not data.get("success"):
         errors = data.get("errors", [])
-        raise RuntimeError(f"Cloudflare API error: {errors}")
+        raise RuntimeError(f"Cloudflare API error executing SQL: {errors}")
 
     result = data.get("result", [])
     # D1 returns result as an array of statement results:
@@ -681,10 +735,18 @@ def upload_project(project_id: int, params: dict) -> dict:
     # User should not need to pre-create the database — the upload step handles it.
     # Database name is derived from site_slug or site_name + project_id.
     if not dry_run and not database_id:
+        assert account_id  # validated above for non-dry-run
         site_slug = params.get("site_slug") or site_name.lower().replace(" ", "-").replace("_", "-")
         db_name = f"d1-{site_slug}-{project_id}"
-        logger.info(f"No D1_DATABASE_ID found — creating new D1 database '{db_name}'")
-        database_id = d1_create_database(account_id, db_name, api_token)
+        logger.info(f"No D1_DATABASE_ID found — checking for existing D1 database '{db_name}'")
+        # Try to find an existing database with the same name first (idempotent re-runs)
+        database_id = d1_find_database_by_name(account_id, db_name, api_token)
+        if database_id:
+            logger.info(f"Found existing D1 database '{db_name}' (UUID: {database_id})")
+        else:
+            logger.info(f"Creating new D1 database '{db_name}'")
+            database_id = d1_create_database(account_id, db_name, api_token)
+            logger.info(f"Created new D1 database '{db_name}' (UUID: {database_id})")
         _save_database_id_to_project(project_id, database_id)
 
     # At this point database_id is guaranteed to be set for real runs
