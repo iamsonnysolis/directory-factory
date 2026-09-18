@@ -11,3 +11,8 @@ venv/
 runs.db
 data/
 .DS_Store
+collector.db
+runs.db
+fix_*.py
+fix_*.txt
+patch_css.py
