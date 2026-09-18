@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import time
+import math
 from datetime import datetime
 from typing import Any
 from sqlalchemy import select, func as sql_func
@@ -24,6 +26,7 @@ async def collect_project(project_id: int):
     from database import AsyncSessionLocal
 
     print(f"[collector] Starting collection orchestrator for project {project_id}")
+    _collect_start = time.time()
 
     client = None
     try:
@@ -53,6 +56,9 @@ async def collect_project(project_id: int):
         print(f"[collector] Project {project_id}: {total_jobs} total jobs to process")
 
         completed_count = 0
+        duplicates_skipped = 0
+        failed_count = 0
+        _last_heartbeat = 0  # throttling: only log heartbeat every 10 jobs OR 10 seconds
         while True:
             # Check project status in its own transaction
             async with AsyncSessionLocal() as db:
@@ -84,13 +90,17 @@ async def collect_project(project_id: int):
                         running = result.scalar_one_or_none()
 
                         if not running:
-                            # Mark project complete
+                            # Mark project complete (unless it was paused/cancelled)
                             async with AsyncSessionLocal() as complete_db:
                                 result = await complete_db.execute(
                                     select(Project).where(Project.id == project_id))
                                 project = result.scalar_one_or_none()
                                 if project:
-                                    project.status = "complete"
+                                    if project.status == "paused":
+                                        # User paused — keep status as paused, don't overwrite
+                                        await complete_db.commit()
+                                    else:
+                                        project.status = "complete"
                                     await complete_db.commit()
 
                             # Log final counts
@@ -111,7 +121,10 @@ async def collect_project(project_id: int):
                                     select(sql_func.count(Place.id)).where(Place.project_id == project_id)
                                 )
                                 place_count = place_result.scalar()
-                            print(f"[collector] Project {project_id} complete: {done_count} jobs done, {failed_count} failed, {place_count} places collected")
+                            _elapsed = int(time.time() - _collect_start)
+                            print(f"[collection.collect] Collection complete: {place_count} places, "
+                                  f"{done_count} jobs completed, {failed_count} jobs failed, "
+                                  f"{duplicates_skipped} duplicates skipped, took {_elapsed}s")
                             break
                     await asyncio.sleep(1)
                     continue
@@ -128,14 +141,18 @@ async def collect_project(project_id: int):
                         job.status = "complete"
                         job.result_count = result_data["places_found"]
                         await db.commit()
-                        if result_data["places_found"] > 0:
-                            print(f"[collector] Job {job.id} complete: {result_data['places_found']} new places (+{result_data['places_skipped_unchanged']} unchanged)")
+                        duplicates_skipped += result_data.get("places_skipped_unchanged", 0)
+                        completed_count += 1
+                        print(f"[collector] Job {job.id} complete: {result_data['places_found']} new places (+{result_data.get('places_skipped_unchanged', 0)} unchanged)")
                     else:
                         job.status = "complete"
                         job.result_count = 0
                         await db.commit()
-                    completed_count += 1
-                    if completed_count % 10 == 0:
+                        completed_count += 1
+
+                    # Throttled progress heartbeat: every 10 jobs OR every 10 seconds (whichever is coarser)
+                    _now = time.time()
+                    if completed_count % 10 == 0 or (_now - _last_heartbeat >= 10):
                         async with AsyncSessionLocal() as prog_db:
                             done_result = await prog_db.execute(
                                 select(sql_func.count(Job.id)).where(
@@ -147,24 +164,26 @@ async def collect_project(project_id: int):
                                 select(sql_func.count(Place.id)).where(Place.project_id == project_id)
                             )
                             pd_c = pd_result.scalar()
-                        pct = int(completed_count / total_jobs * 100) if total_jobs else 0
-                        print(f"[collector] Progress: {done_c}/{total_jobs} jobs done ({pct}%), {pd_c} places collected")
+                        pct = int(done_c / total_jobs * 100) if total_jobs else 0
+                        print(f"[collection.collect] Progress: {done_c}/{total_jobs} jobs ({pct}%) — {pd_c} places collected, {duplicates_skipped} duplicates skipped, {failed_count} failed")
+                        _last_heartbeat = _now
                 except Exception as e:
                     job.error_message = str(e)[:500]
                     if job.attempts < settings.RETRY_COUNT:
-                        print(f"[collector] Job {job.id} retrying (attempt {job.attempts + 1}/{settings.RETRY_COUNT}): {str(e)[:100]}")
+                        delay = settings.RETRY_DELAY_SECONDS * job.attempts
+                        print(f"[collection.collect] Job {job.id} failed (attempt {job.attempts}/{settings.RETRY_COUNT}): {str(e)[:300]} — retrying in {delay}s")
                         job.status = "pending"
                         await db.commit()
-                        delay = settings.RETRY_DELAY_SECONDS * job.attempts
                         await asyncio.sleep(delay)
                     else:
-                        print(f"[collector] Job {job.id} FAILED after {job.attempts} attempts: {str(e)[:200]}")
+                        failed_count += 1
+                        print(f"[collection.collect] Job {job.id} failed after {job.attempts} attempts: {str(e)[:300]} — skipping")
                         job.status = "failed"
                         await db.commit()
                         # Log error in separate transaction
                         async with AsyncSessionLocal() as log_db:
                             log = Log(project_id=project_id, level="error",
-                                      message=f"Job {job.id} failed after {job.attempts} attempts")
+                                      message=f"Job {job.id} failed after {job.attempts} attempts: {str(e)[:500]}")
                             log_db.add(log)
                             await log_db.commit()
             
@@ -215,7 +234,23 @@ async def _execute_text_search(project_id: int, job: Job, client: GooglePlacesCl
             # Log warning when API returns no results — could be rate limited
             async with AsyncSessionLocal() as log_db:
                 log = Log(project_id=project_id, level="warning",
-                          message=f"Job {job.id} returned 0 places — API may be rate-limited (429 quota exceeded)")
+                          message=f"Job {job.id} returned 0 places — API may be rate-limited (429 quota exceeded) or no results for '{term}' in {location}")
+                log_db.add(log)
+                await log_db.commit()
+            print(f"[collection.collect] Job {job.id}: 0 places returned (query='{term}', location='{location}')")
+        
+        # Check for empty-data places (API returned IDs only, no field data)
+        empty_places = 0
+        for place in all_places:
+            if len(place) <= 1 and not place.get("displayName") and not place.get("formattedAddress"):
+                empty_places += 1
+        if empty_places > 0:
+            print(f"[collection.collect] WARNING: {empty_places}/{len(all_places)} places returned with empty data "
+                  f"(id-only responses) — check API key permissions and billing")
+            async with AsyncSessionLocal() as log_db:
+                log = Log(project_id=project_id, level="warning",
+                          message=f"Job {job.id}: {empty_places} places returned with empty data (id-only). "
+                                  f"API key may lack field permissions or billing not enabled.")
                 log_db.add(log)
                 await log_db.commit()
         
@@ -271,12 +306,16 @@ async def _execute_text_search(project_id: int, job: Job, client: GooglePlacesCl
                 db.add(new_place)
                 await db.commit()
                 places_found += 1
+                # Log low-completeness places
+                if completeness < 50:
+                    print(f"[collection.collect] WARNING: Place {place_id} saved with low completeness (score={completeness}) — "
+                          f"API returned minimal data for this result")
                 
     except Exception as e:
         # Log error in separate transaction
         async with AsyncSessionLocal() as db:
             log = Log(project_id=project_id, level="error",
-                      message=f"Search job failed: {str(e)[:200]}")
+                      message=f"Search job failed: {str(e)[:500]}")
             db.add(log)
             await db.commit()
         raise
