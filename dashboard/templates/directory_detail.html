@@ -1,311 +1,107 @@
 {% extends "base.html" %}
 {% block title %}{{ project.name }} — Directory Factory{% endblock %}
 
+<!-- Pipeline-stages.json provides icon/svg names per stage -->
+{% set stage_icon_map = {
+  'collection.collect': 'map-pin',
+  'cleaning.clean': 'sparkles',
+  'enrichment.enrich': 'shirt',
+  'upload.d1': 'cloud',
+  'deploy.provision': 'rocket',
+} %}
+
 {% block content %}
-<!-- Back link + directory header -->
-<div class="detail-header">
-  <a href="/" class="back-link">&larr; Back to Overview</a>
-  <!-- Header row: icon + name on left, status pill on right -->
-  <div class="dir-detail-row">
-    <a href="/directories/{{ directory_id }}" class="dir-detail-link">
-      <span class="dir-icon">
-        {% include 'icons/' + project.niche_icon + '.svg' if project.niche_icon else 'icons/store.svg' %}
-      </span>
-      <div class="dir-title-col">
-        <h1 class="dir-name">{{ project.name }}</h1>
-        {% if niche_label or site_config.domain %}
-        <div class="dir-subtitle">
-          {{ niche_label or '' }}
-          {% if niche_label and site_config.domain %}•{% endif %}
-          {{ site_config.domain or '' }}
-        </div>
-        {% endif %}
-      </div>
-    </a>
-    <span class="status-pill status-{{ status_class }}">
-      {% if status_class == 'running' %}<span class="pulse-dot"></span>{% endif %}
-      {{ current_stage_label }}
-    </span>
+<div class="detail-header" id="detail-header">
+  <!-- Back link + directory header -->
+  <div style="margin-bottom: 16px;">
+    <a href="/" class="back-link">← Back to Overview</a>
   </div>
 
-  <!-- Current Stage banner (only when a script is actively running) -->
-  {% if active_run %}
-  <div class="current-stage-banner">
-    <div class="banner-content">
-      <div class="banner-title">
-        {{ _pipeline_stages_label(active_run.script_name) }}
-        <span class="banner-desc">Running…</span>
+  <!-- Header row: icon + name/subtitle/search terms on left -->
+  <div class="dir-detail-row" id="dir-detail-row" style="margin-bottom: 20px;">
+    <div class="dir-detail-link" id="dir-detail-link" style="display: flex; align-items: flex-start; gap: 12px;">
+      <span class="dir-icon" id="dir-icon" style="flex-shrink: 0; margin-top: 2px;">
+        {% if project.niche_icon %}
+          {% include 'icons/' + project.niche_icon + '.svg' %}
+        {% else %}
+          {% include 'icons/store.svg' %}
+        {% endif %}
+      </span>
+      <div class="dir-title-col" style="flex: 1; min-width: 0;">
+        <h1 class="dir-name" id="dir-name" style="font-size: 20px; font-weight: 700; margin: 0 0 2px 0;">{{ project.name }}</h1>
+        <div class="dir-subtitle" id="dir-subtitle" style="font-size: 12px; color: var(--color-text-secondary); margin: 0 0 4px 0;"></div>
+        <div class="search-terms-list" id="search-terms-list" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;"></div>
       </div>
-      <button class="btn btn-sm btn-error" onclick="cancelRun({{ directory_id }})">Cancel</button>
     </div>
   </div>
-  {% endif %}
+
+  <!-- Status pill — on its own row so it's always fully visible -->
+  <div class="status-row" id="status-row" style="margin-bottom: 24px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+    <span class="status-pill" id="header-status-pill"></span>
+    <span class="status-label" id="status-label" style="font-size: 13px; color: var(--color-text-secondary);"></span>
+  </div>
+
+  <!-- Horizontal divider -->
+  <hr class="header-divider" style="border: none; border-top: 1px solid var(--color-border); margin: 0 0 24px 0;">
+
+  <!-- Action buttons row -->
+  <div class="detail-action-buttons" style="display: flex; gap: 8px; align-items: center; margin-bottom: 24px; flex-wrap: wrap;">
+    <button class="btn btn-sm btn-ghost" id="archive-directory" data-id="{{ directory_id }}" data-name="{{ project.name }}">
+      Archive
+    </button>
+    <button class="btn btn-sm btn-ghost" id="delete-directory" data-id="{{ directory_id }}" data-name="{{ project.name }}">
+      Delete
+    </button>
+  </div>
 
   <!-- Stat tiles -->
-  <div class="stat-tiles detail-stat-tiles">
+  <div class="stat-tiles detail-stat-tiles" id="stat-tiles" style="margin-top: 0;">
     <div class="stat-tile">
-      <span class="stat-tile-value">{{ counts.places_collected | format_int }}</span>
+      <span class="stat-tile-value" id="stat-places">—</span>
       <span class="stat-tile-label">Places Collected</span>
     </div>
     <div class="stat-tile">
-      <span class="stat-tile-value">{{ enriched_count | format_int }}</span>
+      <span class="stat-tile-value" id="stat-enriched">—</span>
       <span class="stat-tile-label">Enriched Records</span>
-      {% if counts.places_collected > 0 %}
-      <span class="stat-pct">({{ (enriched_count / counts.places_collected * 100) | round }}%)</span>
-      {% endif %}
+      <span class="stat-pct" id="stat-enriched-pct"></span>
     </div>
     <div class="stat-tile">
-      <span class="stat-tile-value">{{ quality_score_avg }}</span>
+      <span class="stat-tile-value" id="stat-quality">—</span>
       <span class="stat-tile-label">Avg Quality Score</span>
     </div>
     <div class="stat-tile">
-      {% if site_config.domain and status_class == 'done' and current_stage_label == 'Live' %}
-      <span class="stat-tile-value">8,431</span>
-      {% else %}
-      <span class="stat-tile-value">—</span>
-      {% endif %}
+      <span class="stat-tile-value" id="stat-visits">—</span>
       <span class="stat-tile-label">Monthly Visits</span>
     </div>
   </div>
 
-  <!-- View Live Site row (only when fully deployed) -->
-  {% if site_config.domain and current_stage_label == 'Live' %}
-  <div class="live-site-row">
-    {% include 'icons/rocket.svg' %}
-    <span>View Live Site — {{ site_config.domain }}</span>
-    <span class="live-chevron">&#8250;</span>
+  <!-- View Live Site row (only when fully deployed — shown by JS) -->
+  <div class="live-site-row" id="live-site-row" style="display:none;">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7v10c0 5 10 13 10 13s10-8 10-13V7l-10-5z"/><circle cx="12" cy="12" r="4"/></svg>
+    <span id="live-site-text"></span>
+    <span class="live-chevron">›</span>
   </div>
-  {% endif %}
 </div>
 
-<!-- Tab bar -->
+<!-- Tab bar — exactly 4 tabs per spec -->
 <div class="tab-bar">
   <button class="tab active" data-tab="pipeline">Pipeline</button>
-  <button class="tab" data-tab="collected">Collected</button>
-  <button class="tab" data-tab="cleaned">Cleaned</button>
-  <button class="tab" data-tab="enriched">Enriched</button>
   <button class="tab" data-tab="config">Config</button>
   <button class="tab" data-tab="logs">Logs</button>
   <button class="tab" data-tab="stats">Stats</button>
 </div>
 
 <div class="tab-panels">
+
   <!-- Pipeline Tab (default) -->
   <div class="tab-panel active" id="tab-pipeline">
-
-    <!-- 7-dot stepper (same component as Overview card, no connecting line) -->
-    <div class="stepper detail-stepper">
-      {% for s in stages %}
-      <div class="stepper-step">
-        <div class="stepper-dot {{ s.state }}">
-          {% if s.state == 'done' or s.state == 'error' %}
-            {% include 'icons/check.svg' %}
-          {% endif %}
-        </div>
-        <div class="stepper-label">{{ _stage_short_label(s.icon_key) }}</div>
-      </div>
-      {% endfor %}
-    </div>
-
-    <!-- Pipeline progress summary -->
-    <div class="pipeline-progress-summary">
-      {{ _done_count(stages) }} of {{ stages | length }} stages complete
-    </div>
-
-    <!-- Five stage cards -->
-    {% for stage in _pipeline_stages_for_detail() %}
-    {% set stage_key = stage.key %}
-    {% set stage_script = stage.script_name %}
-    {% set stage_state = _stage_state(stages, stage_script) %}
-    {% set stage_pct = _stage_progress_pct(stage_counts.get(stage_script, {}), counts, stage_key) %}
-    {% set stage_done = stage_counts.get(stage_script, {}).get('done', 0) or stage_counts.get(stage_script, {}).get('records', 0) %}
-    {% set stage_total = counts.places_collected if stage_key in ('collecting', 'cleaning', 'enriching') else stage_done %}
-
-    <div class="stage-card" data-stage="{{ stage_key }}">
-      <div class="stage-card-header">
-        <div class="stage-card-icon">
-          {% include 'icons/' + _pipeline_icon_for(stage.script_name) + '.svg' %}
-        </div>
-        <div class="stage-card-title">
-          <span class="stage-name">{{ _stage_short_label(stage_key) }}</span>
-          {% if stage_state == 'error' %}
-          <span class="status-pill status-error">Error</span>
-          {% else %}
-<span class="status-pill status-{{ stage_state }}">{{ _stage_pill_label(stage_state, stage.label) }}</span>
-          {% endif %}
-        </div>
-        <button class="btn btn-sm btn-{{ 'primary' if stage_state == 'not_started' or stage_state == 'running' else 'ghost' }}"
-                onclick="startStage('{{ stage_script }}', {{ directory_id }})"
-                {% if stage_state == 'done' %}data-state="done"{% endif %}>
-          {{ stage.action_button }}
-        </button>
-      </div>
-
-      <p class="stage-description">{{ stage.description }}</p>
-
-      {% if stage_state != 'not_started' %}
-      <div class="stage-progress-row">
-        <div class="progress-bar">
-          <div class="progress-fill" style="width: {{ stage_pct }}%;"></div>
-        </div>
-        <span class="progress-text">{{ stage_done }} / {{ stage_total }}</span>
-      </div>
-      {% endif %}
-
-      <div class="stage-timestamp">
-        {% set run = _stage_last_run(directory_id, stage_script) %}
-        {% if run %}
-        {{ run.started_at }}
-        {% else %}
-        —
-        {% endif %}
-      </div>
-    </div>
-
-    {% if not loop.last %}<div class="stage-divider"></div>{% endif %}
-    {% endfor %}
-
-    <!-- Recent Activity feed -->
-    <div class="activity-feed">
-      <div class="activity-header">
-        <span>Recent Activity</span>
-        <a href="#" class="activity-view-all" onclick="switchTab('logs'); return false;">View all →</a>
-      </div>
-      <div class="log-panel" style="max-height:240px; overflow-y:auto;">
-        {% for run in recent_runs[:5] %}
-        <div class="log-row">
-          <div class="log-row-summary">
-            <span class="log-dot {{ 'success' if run.status == 'success' else ('error' if run.status == 'error' else 'running') }}"></span>
-            <span class="log-time">{{ run.started_at.split('T')[1][:5] if run.started_at else '—' }}</span>
-            <span class="log-script">{{ run.script_name }}</span>
-            <span class="log-message">{{ run.summary or _last_traceback_line(run.error) if run.status == 'error' and run.error else (run.summary or run.status) }}</span>
-            <span class="log-chevron">⌄</span>
-          </div>
-          <div class="log-row-detail">
-            {% if run.stdout or run.stderr %}
-            <pre class="log-raw">{{ run.stdout or '' }}{% if run.stderr %}--- stderr ---\n{{ run.stderr }}{% endif %}</pre>
-            {% else %}
-            <div class="log-placeholder">No output recorded.</div>
-            {% endif %}
-          </div>
-        </div>
-        {% else %}
-        <div class="log-row">
-          <div class="log-row-summary">
-            <span class="log-message">No recent activity</span>
-          </div>
-        </div>
-        {% endfor %}
-      </div>
+    <div id="pipeline-content">
+      <!-- Stepper + stage cards — rendered by JS from pipeline-state -->
+      <div class="pipeline-loading">Loading pipeline state…</div>
     </div>
   </div>
 
-  <!-- Collected Tab (raw Google Places data from collection stage) -->
-  <div class="tab-panel" id="tab-collected">
-    <div class="tab-section-header">
-      <div class="tab-section-title">Collected Places</div>
-      <div class="tab-section-subtitle">Raw data from the Google Places API (stored in collector.db)</div>
-    </div>
-
-    <div class="data-toolbar">
-      <input type="text" id="collected-search" placeholder="Search collected places…" class="search-input">
-      <button class="filter-btn" data-action="refresh-collected">Refresh</button>
-    </div>
-
-    <div class="table-container">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Address</th>
-            <th>Search Term</th>
-            <th>Completeness</th>
-            <th>Found</th>
-          </tr>
-        </thead>
-        <tbody id="collected-table-body">
-          <tr><td colspan="5" class="loading-row">Loading…</td></tr>
-        </tbody>
-      </table>
-      <div class="pagination-bar" id="collected-pagination"></div>
-    </div>
-  </div>
-
-  <!-- Cleaned Tab (cleaned data from cleaning stage) -->
-  <div class="tab-panel" id="tab-cleaned">
-    <div class="tab-section-header">
-      <div class="tab-section-title">Cleaned Business Data</div>
-      <div class="tab-section-subtitle">Post-cleaning normalized data from <code>data/{{ directory_id }}/cleaned/businesses.jsonl</code></div>
-    </div>
-
-    <div class="data-toolbar">
-      <input type="text" id="cleaned-search" placeholder="Search cleaned places…" class="search-input">
-      <span class="filter-label">Min completeness:</span>
-      <input type="range" id="cleaned-completeness" min="0" max="100" value="0" class="range-input">
-      <span class="range-val" id="cleaned-completeness-val">0%</span>
-      <button class="filter-btn" data-action="refresh-cleaned">Refresh</button>
-    </div>
-
-    <div class="table-container">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Address</th>
-            <th>Suburb</th>
-            <th>State</th>
-            <th>Completeness</th>
-            <th>Phone</th>
-            <th>Website</th>
-            <th>Rating</th>
-          </tr>
-        </thead>
-        <tbody id="cleaned-table-body">
-          <tr><td colspan="8" class="loading-row">No cleaned data yet — run the Clean stage</td></tr>
-        </tbody>
-      </table>
-      <div class="pagination-bar" id="cleaned-pagination"></div>
-    </div>
-  </div>
-
-  <!-- Enriched Tab (AI-enriched data from enrichment stage) -->
-  <div class="tab-panel" id="tab-enriched">
-    <div class="tab-section-header">
-      <div class="tab-section-title">Enriched Business Data</div>
-      <div class="tab-section-subtitle">AI-enriched data from <code>data/{{ directory_id }}/enriched/businesses.jsonl</code></div>
-    </div>
-
-    <div class="data-toolbar">
-      <input type="text" id="enriched-search" placeholder="Search enriched places…" class="search-input">
-      <span class="filter-label">Min quality:</span>
-      <input type="range" id="enriched-quality" min="0" max="10" value="0" class="range-input">
-      <span class="range-val" id="enriched-quality-val">0+</span>
-      <button class="filter-btn" data-action="refresh-enriched">Refresh</button>
-    </div>
-
-    <div class="table-container">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Address</th>
-            <th>Suburb</th>
-            <th>Quality</th>
-            <th>Phone</th>
-            <th>Website</th>
-            <th>Rating</th>
-            <th>AI Generated</th>
-          </tr>
-        </thead>
-        <tbody id="enriched-table-body">
-          <tr><td colspan="8" class="loading-row">No enriched data yet — run the Enrich stage</td></tr>
-        </tbody>
-      </table>
-      <div class="pagination-bar" id="enriched-pagination"></div>
-    </div>
-  </div>
-
-  <!-- Config Tab (unchanged) -->
+  <!-- Config Tab -->
   <div class="tab-panel" id="tab-config">
     <div class="config-layout">
       <form class="form-col" id="config-form">
@@ -376,7 +172,7 @@
     </div>
   </div>
 
-  <!-- Logs Tab (renamed from Runs) -->
+  <!-- Logs Tab -->
   <div class="tab-panel" id="tab-logs">
     <div class="stage-panel">
       <div class="stage-panel-header">
@@ -389,8 +185,8 @@
         <span class="log-filter-label">Script:</span>
         <select class="filter-select" id="log-script-filter">
           <option value="all">All</option>
-          {% for stage in _pipeline_stages_for_detail() %}
-          <option value="{{ stage.script_name }}">{{ stage.script_name }}</option>
+          {% for stage in PIPELINE_STAGES %}
+          <option value="{{ stage[0] }}">{{ stage[0] }}</option>
           {% endfor %}
         </select>
         <span class="log-filter-label">Status:</span>
@@ -401,7 +197,7 @@
           <option value="running">Running</option>
         </select>
       </div>
-      <div class="log-panel">
+      <div class="log-panel" id="log-panel">
         {% for run in recent_runs %}
         <div class="log-row" data-run-id="{{ run.id }}" data-script="{{ run.script_name }}" data-status="{{ run.status }}">
           <div class="log-row-summary" onclick="toggleLogRow(this)">
@@ -425,33 +221,18 @@
             {% endif %}
           </div>
         </div>
-        {% endfor %}
-        {% for log in recent_collection_logs %}
-        <div class="log-row" data-log-id="{{ log.id }}" data-script="collection.jobs" data-status="{{ 'error' if log.level == 'error' else ('running' if log.level == 'info' else 'success') }}">
-          <div class="log-row-summary" onclick="toggleLogRow(this)">
-            <span class="log-dot {{ 'error' if log.level == 'error' else 'success' }}"></span>
-            <span class="log-time">{{ log.created_at.split(' ')[1][:5] if log.created_at else '—' }}</span>
-            <span class="log-script">collection.jobs</span>
-            <span class="log-message">{{ log.message }}</span>
-            <span class="log-chevron">⌄</span>
-          </div>
-          <div class="log-row-detail">
-            <div class="log-placeholder">Job ID: {{ log.id }} — Level: {{ log.level }}</div>
-          </div>
-        </div>
-        {% endfor %}
-        {% if not recent_runs and not recent_collection_logs %}
+        {% else %}
         <div class="log-row">
           <div class="log-row-summary">
             <span class="log-message">No runs yet.</span>
           </div>
         </div>
-        {% endif %}
+        {% endfor %}
       </div>
     </div>
   </div>
 
-  <!-- Stats Tab (renamed from Live Stats) -->
+  <!-- Stats Tab -->
   <div class="tab-panel" id="tab-stats">
     <div class="stage-panel">
       <div class="stage-panel-header">
@@ -487,9 +268,8 @@
 {% block extra_js %}
 <script>
   const DIRECTORY_ID = {{ directory_id }};
-  const PROJECT_ID = {{ directory_id }};
 
-  // Tab switching
+  // ─── Tab switching ──────────────────────────────────────────────────────
   function switchTab(tabName) {
     document.querySelectorAll('.tab-bar .tab').forEach(function(t) {
       t.classList.toggle('active', t.getAttribute('data-tab') === tabName);
@@ -512,57 +292,527 @@
     });
   });
 
-  // Start / Re-run a stage script
-  function startStage(scriptName, dirId) {
-    var dirId = dirId || DIRECTORY_ID;
+  // ─── Single source of truth: render the ENTIRE page from one endpoint ─
+  let pollingInterval = null;
+
+  function renderPageFromPipelineState(data) {
+    // --- Header pill ---
+    const pill = document.getElementById('header-status-pill');
+    if (pill) {
+      pill.className = 'status-pill status-' + data.header.status_class;
+      pill.innerHTML = (data.header.status_class === 'running' || data.header.status_class === 'paused' ? '<span class="pulse-dot"></span>' : '') + data.header.label;
+    }
+
+    const statusLabel = document.getElementById('status-label');
+    if (statusLabel) {
+      statusLabel.textContent = data.header.sublabel || '';
+      statusLabel.style.display = (data.header.sublabel ? '' : 'none');
+    }
+
+    // --- Directory name + subtitle ---
+    const nameEl = document.getElementById('dir-name');
+    if (nameEl) nameEl.textContent = data.project.name;
+
+    const subtitleEl = document.getElementById('dir-subtitle');
+    if (subtitleEl) {
+      const parts = [];
+      const project = data.project || {};
+      if (project.field_tier) parts.push(project.field_tier);
+      if (data.site_config) {
+        if (data.site_config.niche_label) parts.push(data.site_config.niche_label);
+        if (data.site_config.domain) parts.push(data.site_config.domain);
+      }
+      subtitleEl.textContent = parts.join(' • ');
+    }
+
+    // --- Search terms tags ---
+    const termsEl = document.getElementById('search-terms-list');
+    if (termsEl) {
+      const terms = (data.search_terms || []);
+      if (terms.length > 0) {
+        termsEl.innerHTML = terms.map(function(t) {
+          return '<span class="search-term-tag">' + t + '</span>';
+        }).join('');
+        termsEl.style.display = 'flex';
+      } else {
+        termsEl.innerHTML = '';
+        termsEl.style.display = 'none';
+      }
+    }
+
+    // --- Stat tiles ---
+    const stat = data.stat_tiles;
+    const statPlaces = document.getElementById('stat-places');
+    if (statPlaces) statPlaces.textContent = stat.places_collected > 0 ? stat.places_collected.toLocaleString() : '—';
+
+    const statEnriched = document.getElementById('stat-enriched');
+    if (statEnriched) statEnriched.textContent = stat.enriched_records > 0 ? stat.enriched_records.toLocaleString() : '—';
+
+    const statEnrichedPct = document.getElementById('stat-enriched-pct');
+    if (statEnrichedPct && stat.places_collected > 0) {
+      statEnrichedPct.textContent = `(${stat.enriched_pct}%)`;
+    } else if (statEnrichedPct) {
+      statEnrichedPct.textContent = '';
+    }
+
+    const statQuality = document.getElementById('stat-quality');
+    if (statQuality) statQuality.textContent = stat.avg_quality_score > 0 ? stat.avg_quality_score : '—';
+
+    const statVisits = document.getElementById('stat-visits');
+    if (statVisits) statVisits.textContent = stat.monthly_visits;
+
+    // --- View Live Site row ---
+    const liveRow = document.getElementById('live-site-row');
+    if (liveRow) {
+      const showLive = data.header.status_class === 'done' && data.header.label === 'Live';
+      liveRow.style.display = showLive ? 'flex' : 'none';
+    }
+
+    // --- Stepper + "N of 7" caption ---
+    const doneCount = data.done_count;
+    const totalStages = data.total_stages;
+    const stepperContainer = document.getElementById('pipeline-content');
+    if (stepperContainer) {
+      let html = '';
+
+      // Pipeline progress summary
+      html += '<div class="pipeline-progress-summary">' + doneCount + ' of ' + totalStages + ' stages complete</div>';
+
+      // 7-dot stepper
+      html += '<div class="stepper detail-stepper">';
+      for (const s of data.stepper) {
+        const dotClass = s.state === 'done' ? 'done' : s.state === 'running' ? 'running' : s.state === 'paused' ? 'paused' : s.state === 'error' ? 'error' : 'not-started';
+        html += '<div class="stepper-step">';
+        html += '<div class="stepper-dot ' + dotClass + '">';
+        if (s.state === 'done' || s.state === 'error') {
+          html += '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
+        }
+        html += '</div>';
+        html += '<div class="stepper-label">' + s.label + '</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+
+      // Stage cards
+      for (const card of data.stage_cards) {
+        const cardState = card.state;
+        const pillClass = cardState === 'error' ? 'error' : 'status-' + cardState;
+        const pillText = cardState === 'error' ? 'Error' : card.pill_label;
+
+        html += '<div class="stage-card" data-stage="' + card.key + '">';
+
+        // Card header: icon + title + pill + button + expand toggle
+        html += '<div class="stage-card-header">';
+        html += '<div class="stage-card-icon">';
+        // Inline SVG based on icon name
+        const iconSvg = getIconSvg(card.icon);
+        html += iconSvg;
+        html += '</div>';
+        html += '<div class="stage-card-title">';
+        html += '<span class="stage-name">' + card.short_label + '</span>';
+        html += '<span class="status-pill ' + pillClass + '">' + pillText + '</span>';
+        html += '</div>';
+
+        // Button — label matches current state
+        const btnClass = (cardState === 'not_started' || cardState === 'error') ? 'btn-primary' : 'btn-ghost';
+        html += '<button class="btn btn-sm btn-' + btnClass + '" onclick="handleStageAction(\'' + card.button_action + '\', \'' + card.script_name + '\', ' + data.directory_id + ')">' + card.button_label + '</button>';
+
+        // Expand toggle — only for cards that have expandable content
+        if (card.has_expand_content) {
+          html += '<button class="stage-expand-btn" onclick="toggleStageCard(this)" aria-label="Expand"><span class="chevron">⌄</span></button>';
+        }
+
+        html += '</div>';
+
+        // Description
+        html += '<p class="stage-description">' + card.description + '</p>';
+
+        // Progress row (only if stage has been started or is running)
+        if (card.count_text && card.progress_pct > 0 || cardState === 'running' || cardState === 'paused' || cardState === 'done' || cardState === 'error') {
+          html += '<div class="stage-progress-row">';
+          html += '<div class="progress-bar"><div class="progress-fill" style="width:' + card.progress_pct + '%;"></div></div>';
+          if (card.count_text) {
+            html += '<span class="progress-text">' + card.count_text + '</span>';
+          }
+          html += '</div>';
+        }
+
+        // Timestamp or error message
+        if (card.error_msg) {
+          html += '<div class="stage-timestamp error-text">' + card.error_msg + '</div>';
+        } else if (card.finished_at && cardState === 'done') {
+          html += '<div class="stage-timestamp">Completed ' + formatTimestamp(card.finished_at) + '</div>';
+        } else if (card.started_at && (cardState === 'running' || cardState === 'paused')) {
+          html += '<div class="stage-timestamp">Started ' + formatTimestamp(card.started_at) + '</div>';
+        } else if (card.started_at) {
+          html += '<div class="stage-timestamp">' + formatTimestamp(card.started_at) + '</div>';
+        }
+
+        // Accordion expand content (lazy-loaded on expand)
+        if (card.has_expand_content) {
+          html += '<div class="stage-card-expand" id="expand-' + card.key + '"></div>';
+        }
+
+        html += '</div>';
+      }
+
+      // Recent Activity
+      html += '<div class="activity-feed">';
+      html += '<div class="activity-header"><span>Recent Activity</span>';
+      html += '<a href="#" class="activity-view-all" onclick="switchTab(\'logs\'); return false;">View all →</a>';
+      html += '</div>';
+      html += '<div class="log-panel" style="max-height:240px; overflow-y:auto;">';
+      if (data.activity_items && data.activity_items.length > 0) {
+        for (const item of data.activity_items) {
+          const dotClass = item.status === 'success' ? 'success' : item.status === 'error' ? 'error' : 'running';
+          html += '<div class="log-row">';
+          html += '<div class="log-row-summary">';
+          html += '<span class="log-dot ' + dotClass + '"></span>';
+          html += '<span class="log-time">' + item.time + '</span>';
+          html += '<span class="log-script">' + item.script_name + '</span>';
+          html += '<span class="log-message">' + item.summary + '</span>';
+          html += '</div></div>';
+        }
+      } else {
+        html += '<div class="log-row"><div class="log-row-summary"><span class="log-message">No recent activity</span></div></div>';
+      }
+      html += '</div></div>';
+
+      stepperContainer.innerHTML = html;
+    }
+  }
+
+  // ─── Icon SVGs (inline, no icon library dependency) ──────────────────────
+  function getIconSvg(name) {
+    const icons = {
+      'map-pin': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 6-9 13-9 13s-9-7-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>',
+      'sparkles': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7-6.5-4-6.5 4 2-7-5.5-4h7z"/></svg>',
+      'shirt': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><body><path d="M20.35 18l-8.5-15L3.65 18h16.7z"/><path d="M12 5v6"/></body></svg>',
+      'cloud': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 16.5A4.5 4.5 0 0012 18a5 5 0 11-.1-10 4 4 0 10-.1 8Z"/></svg>',
+      'rocket': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7v10c0 5 10 13 10 13s10-8 10-13V7L12 2Z"/></svg>',
+      'store': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>',
+      'check': '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>',
+    };
+    return icons[name] || icons['store'];
+  }
+
+  function formatTimestamp(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear() + ', ' +
+           String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+
+  // ─── Stage action handler (replaces startStage + old pause/cancel handlers) ─
+  function handleStageAction(action, scriptName, dirId) {
     var btn = event ? event.target : null;
     if (btn) {
       btn.dataset.originalText = btn.textContent;
       btn.disabled = true;
-      btn.textContent = 'Starting…';
+      btn.textContent = 'Working…';
     }
-    fetch('/api/directories/' + dirId + '/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ script_name: scriptName, params: {} })
-    }).then(function(r) { return r.json(); }).then(function(data) {
-      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.originalText || 'Run'; }
-      if (data.status === 'started' || data.status === 'success') {
-        // Start collection progress polling if this is a collection run
-        if (scriptName === 'collection.collect' && typeof startCollectionProgressPolling === 'function') {
-          startCollectionProgressPolling(dirId);
+
+    var fetchUrl, fetchOpts;
+
+    if (action === 'run') {
+      fetchUrl = '/api/directories/' + dirId + '/run';
+      fetchOpts = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script_name: scriptName, params: {} }),
+      };
+    } else if (action === 'pause') {
+      fetchUrl = '/api/directories/' + dirId + '/pause';
+      fetchOpts = { method: 'POST' };
+    } else if (action === 'resume') {
+      fetchUrl = '/api/directories/' + dirId + '/resume';
+      fetchOpts = { method: 'POST' };
+    } else if (action === 'cancel') {
+      fetchUrl = '/api/directories/' + dirId + '/cancel';
+      fetchOpts = { method: 'POST' };
+    }
+
+    fetch(fetchUrl, fetchOpts)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (btn) { btn.disabled = false; btn.textContent = btn.dataset.originalText || 'Run'; }
+        if (data.status === 'error' || data.detail) {
+          showToast(scriptName + ' failed', 'error', (data.error || data.detail || 'Unknown error').substring(0, 300));
+        } else {
+          // Start polling to catch the state transition
+          fetchPipelineState();
+          showToast(scriptName + ' triggered', 'success', 'Running in background');
         }
-        showToast(scriptName + ' started', 'success', 'Running in background — progress updates below');
-      } else {
-        showToast(scriptName + ' failed', 'error', (data.error || data.detail || 'Unknown error'));
-      }
-    }).catch(function(err) {
-      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.originalText || 'Run'; }
-      showToast('Network error', 'error', err.message);
+      })
+      .catch(function(err) {
+        if (btn) { btn.disabled = false; btn.textContent = btn.dataset.originalText || 'Run'; }
+        showToast('Network error', 'error', err.message);
+      });
+  }
+
+  // ─── Single source of truth fetch ─────────────────────────────────────────
+  function fetchPipelineState() {
+    return fetch('/api/directories/' + DIRECTORY_ID + '/pipeline-state')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        renderPageFromPipelineState(data);
+
+        // Polling: while ANY stage is running, keep polling
+        const anyRunning = data.header.is_running;
+        if (anyRunning && !pollingInterval) {
+          pollingInterval = setInterval(function() {
+            fetchPipelineState();
+          }, 2000);
+        } else if (!anyRunning && pollingInterval) {
+          clearInterval(pollingInterval);
+          pollingInterval = null;
+        }
+
+        return data;
+      })
+      .catch(function(err) {
+        console.error('pipeline-state fetch failed:', err);
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+      });
+  }
+
+  // ─── Initial load ─────────────────────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', function() {
+    fetchPipelineState();
+  });
+
+  // ─── Archive / Unarchive ──────────────────────────────────────────────────
+  const archiveBtn = document.getElementById('archive-directory');
+  if (archiveBtn) {
+    archiveBtn.addEventListener('click', function() {
+      if (!confirm('Archive \"' + (this.dataset.name || 'this directory') + '\"? It will be hidden from the main list but not deleted.')) return;
+      fetch('/api/directories/' + this.dataset.id + '/archive', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.success) { showToast('Directory archived', 'success'); window.location.href = '/'; }
+          else { showToast('Archive failed', 'error', data.message || 'Unknown error'); }
+        })
+        .catch(function() { showToast('Network error', 'error'); });
     });
   }
 
-  // Cancel an active run
-  function cancelRun(directoryId) {
-    fetch('/api/directories/' + directoryId + '/cancel', { method: 'POST' })
-      .then(function(r) { return r.json(); })
-      .then(function(data) { location.reload(); })
-      .catch(function() { location.reload(); });
+  // ─── Delete confirmation ──────────────────────────────────────────────────
+  const deleteModal = document.getElementById('delete-confirm-modal');
+  const deleteBtn = document.getElementById('delete-directory');
+  const cancelDeleteBtn = document.getElementById('cancel-delete');
+  const confirmDeleteBtn = document.getElementById('confirm-delete');
+
+  if (deleteBtn && deleteModal) {
+    deleteBtn.addEventListener('click', function() {
+      deleteModal.classList.add('active');
+    });
+  }
+  if (cancelDeleteBtn && deleteModal) {
+    cancelDeleteBtn.addEventListener('click', function() {
+      deleteModal.classList.remove('active');
+    });
+  }
+  if (confirmDeleteBtn && deleteModal) {
+    confirmDeleteBtn.addEventListener('click', async function() {
+      const dirId = deleteBtn ? deleteBtn.dataset.id : null;
+      if (!dirId) return;
+      try {
+        const resp = await fetch('/api/directories/' + dirId, { method: 'DELETE' });
+        const data = await resp.json();
+        if (data.success) { showToast('Directory deleted', 'success'); window.location.href = '/'; }
+      } catch(e) { showToast('Delete failed: ' + e.message, 'error'); }
+      deleteModal.classList.remove('active');
+    });
   }
 
-  // Log row expand/collapse on Logs tab — only one row expanded at a time
+  // ─── Config form save ─────────────────────────────────────────────────────
+  const configForm = document.getElementById('config-form');
+  if (configForm) {
+    configForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const formData = new FormData(this);
+      const config = {};
+      for (const [key, value] of formData.entries()) { config[key] = value; }
+      try {
+        const resp = await fetch('/api/directories/' + DIRECTORY_ID + '/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        const data = await resp.json();
+        if (data.success) { showToast('Config saved', 'success'); }
+        else { showToast('Save failed', 'error'); }
+      } catch(e) { showToast('Network error', 'error'); }
+    });
+
+    const colorInputs = configForm.querySelectorAll('input[type="text"]');
+    colorInputs.forEach(function(input) {
+      input.addEventListener('input', function() {
+        const name = input.name;
+        const value = input.value;
+        const previewEl = document.getElementById('preview-' + name);
+        if (previewEl) previewEl.textContent = value || '—';
+        if (name === 'theme_primary_color') {
+          document.documentElement.style.setProperty('--color-primary', value);
+        }
+        if (name === 'theme_secondary_color') {
+          document.documentElement.style.setProperty('--color-secondary', value);
+        }
+      });
+    });
+  }
+
+  // ─── Log row expand/collapse ──────────────────────────────────────────────
   function toggleLogRow(el) {
     var row = el.closest('.log-row');
     var isExpanded = row.classList.contains('expanded');
-    // Collapse all other expanded rows
     document.querySelectorAll('.log-row.expanded').forEach(function(other) {
       if (other !== row) other.classList.remove('expanded');
     });
+    if (isExpanded) row.classList.remove('expanded');
+    else row.classList.add('expanded');
+  }
+
+  // ─── Stage card expand/collapse ─────────────────────────────────────────────
+  function toggleStageCard(btn) {
+    var card = btn.closest('.stage-card');
+    var isExpanded = card.classList.contains('expanded');
     if (isExpanded) {
-      row.classList.remove('expanded');
+      card.classList.remove('expanded');
+      return;
+    }
+    // Only one card expanded at a time
+    document.querySelectorAll('.stage-card.expanded').forEach(function(other) {
+      other.classList.remove('expanded');
+    });
+    card.classList.add('expanded');
+    loadStageExpandContent(card);
+  }
+
+  function loadStageExpandContent(card) {
+    var stageKey = card.getAttribute('data-stage');
+    var expandEl = document.getElementById('expand-' + stageKey);
+    if (!expandEl) return;
+    // Lazy-load content only once
+    if (expandEl.dataset.loaded) return;
+    expandEl.dataset.loaded = 'true';
+
+    if (stageKey === 'collecting') {
+      expandEl.innerHTML = '<div class="stage-expand-loading">Loading places…</div>';
+      loadPlacesTable(expandEl);
     } else {
-      row.classList.add('expanded');
+      // For Clean/Enrich/Upload/Deploy: show last run stdout/stderr
+      expandEl.innerHTML = '<div class="stage-expand-loading">Loading log…</div>';
+      loadStageLog(stageKey, expandEl);
     }
   }
+
+  function loadPlacesTable(expandEl) {
+    fetch('/api/directories/' + DIRECTORY_ID + '/places?limit=50')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.places || data.places.length === 0) {
+          expandEl.innerHTML = '<div class="stage-expand-empty">No places collected yet.</div>';
+          return;
+        }
+        var html = '';
+        html += '<div class="places-expand">';
+        // Search filter
+        html += '<div class="places-filter-bar">';
+        html += '<input type="text" class="places-search" placeholder="Search places…" onkeyup="filterPlacesTable(this)" />';
+        html += '<select class="completeness-filter" onchange="filterPlacesTableByCompleteness(this)">';
+        html += '<option value="all">All completeness</option>';
+        html += '<option value="complete">Complete</option>';
+        html += '<option value="incomplete">Incomplete</option>';
+        html += '</select>';
+        html += '</div>';
+        // Table
+        html += '<table class="places-table">';
+        html += '<thead><tr><th>Name</th><th>Status</th><th>Last Enriched</th></tr></thead>';
+        html += '<tbody id="places-table-body">';
+        for (var i = 0; i < data.places.length; i++) {
+          var p = data.places[i];
+          var completeness = (p.data_completeness_score >= 80 ? 'complete' : 'incomplete');
+          html += '<tr class="place-row ' + completeness + '">';
+          html += '<td>' + (p.display_name || '—') + '</td>';
+          html += '<td><span class="status-pill status-' + (p.data_completeness_score >= 80 ? 'done' : 'not-started') + '">' + (p.data_completeness_score >= 80 ? 'Complete' : 'Incomplete') + '</span></td>';
+          html += '<td>' + (p.data_completeness_score || '—') + '</td>';
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+        html += '</div>';
+        expandEl.innerHTML = html;
+      })
+      .catch(function() {
+        expandEl.innerHTML = '<div class="stage-expand-error">Failed to load places data.</div>';
+      });
+  }
+
+  function filterPlacesTable(searchInput) {
+    var searchTerm = searchInput.value.toLowerCase();
+    var completeness = document.querySelector('.completeness-filter') ? document.querySelector('.completeness-filter').value : 'all';
+    var rows = document.querySelectorAll('#places-table-body .place-row');
+    for (var i = 0; i < rows.length; i++) {
+      var name = rows[i].cells[0].textContent.toLowerCase();
+      var matchesSearch = searchTerm === '' || name.indexOf(searchTerm) !== -1;
+      var matchesCompleteness = completeness === 'all' || rows[i].classList.contains(completeness);
+      rows[i].style.display = (matchesSearch && matchesCompleteness) ? '' : 'none';
+    }
+  }
+
+  function filterPlacesTableByCompleteness(selectEl) {
+    var searchInput = selectEl.closest('.places-expand').querySelector('.places-search');
+    filterPlacesTable(searchInput || { value: '' });
+  }
+
+  function loadStageLog(stageKey, expandEl) {
+    // Map stage key to script name for the run log query
+    var scriptMap = {
+      'cleaning': 'cleaning.clean',
+      'enriching': 'enrichment.enrich',
+      'uploading': 'upload.d1',
+      'deploying': 'deploy.provision'
+    };
+    var script = scriptMap[stageKey];
+    if (!script) {
+      expandEl.innerHTML = '<div class="stage-expand-empty">No log available.</div>';
+      return;
+    }
+    fetch('/api/directories/' + DIRECTORY_ID + '/runs?script=' + encodeURIComponent(script) + '&limit=1')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.runs || data.runs.length === 0) {
+          expandEl.innerHTML = '<div class="stage-expand-empty">No runs yet for this stage.</div>';
+          return;
+        }
+        var run = data.runs[0];
+        var output = run.stdout || run.stderr || 'No output recorded.';
+        expandEl.innerHTML = '<pre class="log-raw">' + output + '</pre>';
+      })
+      .catch(function() {
+        expandEl.innerHTML = '<div class="stage-expand-error">Failed to load log.</div>';
+      });
+  }
+
+  // ─── Log filters ──────────────────────────────────────────────────────────
+  const logScriptFilter = document.getElementById('log-script-filter');
+  const logStatusFilter = document.getElementById('log-status-filter');
+  const logPanel = document.getElementById('log-panel');
+
+  function applyLogFilters() {
+    if (!logPanel) return;
+    const scriptFilter = logScriptFilter ? logScriptFilter.value : 'all';
+    const statusFilter = logStatusFilter ? logStatusFilter.value : 'all';
+    document.querySelectorAll('#log-panel .log-row').forEach(function(row) {
+      const scriptMatch = scriptFilter === 'all' || row.getAttribute('data-script') === scriptFilter;
+      const statusMatch = statusFilter === 'all' || row.getAttribute('data-status') === statusFilter;
+      row.style.display = (scriptMatch && statusMatch) ? '' : 'none';
+    });
+  }
+
+  if (logScriptFilter) logScriptFilter.addEventListener('change', applyLogFilters);
+  if (logStatusFilter) logStatusFilter.addEventListener('change', applyLogFilters);
 </script>
 {% endblock %}

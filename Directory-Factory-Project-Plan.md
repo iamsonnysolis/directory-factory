@@ -504,7 +504,25 @@ def run_script(script_name: str, project_id: int, params: dict | None = None) ->
         cmd += ["--params", json.dumps(params)]
 
     started_at = datetime.datetime.utcnow().isoformat()
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+
+    # ─── Insert a 'running' row BEFORE subprocess starts ──────────────────────
+    # This makes in-progress runs visible in the dashboard's Logs tab
+    # immediately, rather than only appearing after the subprocess finishes.
+    # Dashboard-UX-Decisions.md Q8 requires this for live collection feedback.
+    conn = sqlite3.connect("runs.db")
+    conn.execute(
+        "INSERT INTO runs (script_name, project_id, started_at, finished_at, status, summary, error) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (script_name, project_id, started_at, started_at, "running", None, None),
+    )
+    conn.commit()
+    run_id = conn.execute(
+        "SELECT id FROM runs WHERE project_id = ? ORDER BY started_at DESC LIMIT 1",
+        (project_id,)
+    ).fetchone()[0]
+    conn.close()
+
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
     finished_at = datetime.datetime.utcnow().isoformat()
 
     try:
@@ -513,12 +531,18 @@ def run_script(script_name: str, project_id: int, params: dict | None = None) ->
     except (IndexError, json.JSONDecodeError):
         output = {"status": "error", "summary": None, "error": proc.stderr}
 
+    output.setdefault("status", "success")
+    output.setdefault("summary", None)
+    output.setdefault("counts", {})
+    output.setdefault("error", None)
+
+    # ─── UPDATE the 'running' row with final results ────────────────────────
     conn = sqlite3.connect("runs.db")
     conn.execute(
-        "INSERT INTO runs (script_name, project_id, started_at, finished_at, status, summary, error) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (script_name, project_id, started_at, finished_at,
-         output["status"], output.get("summary"), output.get("error")),
+        "UPDATE runs SET finished_at = ?, status = ?, summary = ?, error = ?, "
+        "stdout = ?, stderr = ? WHERE id = ?",
+        (finished_at, output["status"], output.get("summary"), output.get("error"),
+         proc.stdout, proc.stderr, run_id),
     )
     conn.commit()
     conn.close()
@@ -576,7 +600,7 @@ CREATE TABLE runs (
 |---|---|---|---|
 | 3.1 | Create `runner/contract.py` exactly as shown above | Done | Created `scripts/runner/contract.py` — @script_main decorator with argparse, JSON params, try/except wrapper, exit codes. |
 | 3.2 | Create `runs.db` and run the `CREATE TABLE runs` SQL above against it | Done | Created `runner/run.py:init_runs_db()` with CREATE TABLE IF NOT EXISTS. Schema includes stdout/stderr TEXT columns per Q8 schema note. |
-| 3.3 | Create `runner/run.py` exactly as shown above | Done | Created `scripts/runner/run.py` with SCRIPT_MAP (5 entries), run_script(), CLI. Fixed from plan spec: uses sys.executable + sys.path resolution, captures stdout/stderr into DB columns, resolves paths dynamically from project root. |
+| 3.3 | Create `runner/run.py` exactly as shown above | Done | Created `scripts/runner/run.py` with SCRIPT_MAP (5 entries), run_script(), CLI. Fixed from plan spec: uses sys.executable + sys.path resolution, captures stdout/stderr into DB columns, resolves paths dynamically from project root. **UPDATED 2026-08-21**: `run_script()` now inserts a `status='running'` row into runs.db BEFORE the subprocess starts, then updates that same row with `status='success'/'error'`, stdout, stderr after completion — so in-progress runs are visible in the Logs tab immediately. |
 | 3.4 | Test the runner manually with a throwaway script that just returns `{"summary": "test ok"}` — confirm a row lands in `runs.db` | Done | VERIFIED: throwaway script with @script_main, run_script() returned correct JSON, row logged in runs.db with stdout/stderr captured. Error path also tested (exception → status=error logged). |
 | 3.5 | Wrap Phase 1 (collection) scripts using the `@script_main` decorator pattern | Done | Created `scripts/collection/collect.py` — thin wrapper that sets up sys.path for flat imports, calls asyncio.run(collect_project(project_id)), reports counts from DB. |
 | 3.6 | Wrap Phase 2 (cleaning/enrichment) scripts using the `@script_main` decorator pattern | Done | Added `__main__` blocks to `cleaning.py` and `enrichment.py` with @script_main. cleaning.py reads raw_json from collector.db, writes cleaned_*.jsonl. enrichment.py reads cleaned JSONL, calls enrich_place() via Gemini, writes enriched_*.jsonl with quality scores. |

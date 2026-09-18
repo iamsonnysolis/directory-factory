@@ -1,0 +1,170 @@
+
+/* ─── Directory Detail Header — mobile-friendly layout ────────────────── */
+
+.detail-header {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 24px;
+}
+
+.back-link {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  display: inline-block;
+  margin-bottom: 16px;
+}
+
+.back-link:hover {
+  color: var(--color-teal);
+}
+
+.dir-detail-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+}
+
+/* Header row: icon+name on left, status pill on right */
+.dir-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.dir-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(20, 184, 166, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dir-icon svg {
+  width: 20px;
+  height: 20px;
+  color: var(--color-teal);
+}
+
+.dir-name {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.dir-title-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.dir-subtitle {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+.search-terms-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 4px;
+  margin-top: 2px;
+}
+
+.search-term-tag {
+  display: inline-block;
+  background: rgba(20, 184, 166, 0.1);
+  color: var(--color-teal);
+  border: 1px solid rgba(20, 184, 166, 0.3);
+  border-radius: 12px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* ─── Action buttons (Archive/Delete) ───────────────────────────── */
+.detail-action-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.detail-action-buttons .btn {
+  flex: 1;
+  justify-content: center;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.status-not-started { background: #f3f4f6; color: #6b7280; }
+.status-running { background: #dbeafe; color: #1d4ed8; animation: pulse-bg 2s infinite; }
+.status-done { background: #d1fae5; color: #065f46; }
+.status-error { background: #fee2e2; color: #991b2b; }
+.status-paused { background: #fef3c7; color: #92408; }
+
+.pulse-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-running);
+  margin-right: 4px;
+  animation: pulse 1.5s infinite;
+}
+
+/* ─── Mobile improvements (≤480px) ─────────────── */
+@media (max-width: 480px) {
+  .dir-detail-row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .dir-detail-link {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .dir-name {
+    font-size: 18px;
+  }
+
+  .dir-subtitle {
+    font-size: 11px;
+  }
+
+  .search-term-tag {
+    font-size: 10px;
+    padding: 1px 8px;
+  }
+
+  /* Action buttons: stack vertically on very narrow screens */
+  .detail-action-buttons {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .detail-action-buttons .btn {
+    flex: none;
+    width: 100%;
+  }
+}

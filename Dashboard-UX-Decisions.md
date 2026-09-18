@@ -46,6 +46,18 @@ already has a working 3-second polling pattern for exactly this kind of
 long-running job — reuse it rather than building streaming infrastructure.
 It's good enough UX for jobs that run minutes, not milliseconds, and it's
 one dependency-free `setInterval` instead of a new subsystem.
+
+**Correction, found during implementation:** polling must update the
+actual persistent UI element for that stage — the stage card's progress
+bar, percentage text, and status pill — not a toast. A toast is for a
+discrete one-off event ("Collection started," "Collection complete"), not
+for narrating a number that changes every few seconds over several
+minutes; using it for the latter is why progress looked broken even
+though the polling itself was working. One update function should run on
+**both** triggers — right after the user clicks Start, and on page
+load/refresh if a script turns out to already be running — so there's
+never a gap where the card shows a stale server-rendered snapshot before
+the first poll tick lands.
 **Status:** Decided.
 
 ---
@@ -380,16 +392,88 @@ directories will be added later:
 ## Page: Directory Detail (`/directories/{id}`)
 
 Synthesized from two reference mockups — consolidated from the original
-8-tab breakdown down to 4, with a persistent header/banner/stat area that
-stays visible regardless of which tab is active. Nothing from the original
-8-tab version is lost — Collect's map+table and the Clean/Enrich/Upload/
-Deploy shared panel shape still exist, they're just nested as expandable
-cards inside the Pipeline tab instead of being separate tabs.
+8-tab breakdown down to 4 (Pipeline, Config, Logs, Stats). **This is the
+final, authoritative version of this page's design — a "Collected/
+Cleaned/Enriched" tab regression has appeared in the build twice now,
+against this explicit decision. There are exactly 4 tabs. Collect, Clean,
+Enrich, Upload, and Deploy are cards INSIDE the Pipeline tab, never
+separate tabs — if this shows up again, it's a bug, not a design
+question to re-litigate.**
 
-**This entire header/banner/stat area is single-column below 768px** — the
-current build has a stat tile positioned beside the header instead of
-below it, and it doesn't reflow, which is the mobile bug to fix. Layout
-order, one column, full width, top to bottom:
+### The one rule that matters most on this page: a single source of truth for pipeline state
+
+Every symptom found in testing — a stage card stuck on "Done" while its
+own numbers were visibly still changing, a progress bar rendering 100%
+filled next to text reading "0 / 387," a "2 of 7 stages complete" caption
+that didn't match which stepper dots were actually checked, a floating
+"Running" badge with its own Pause button that didn't match the actual
+stage card underneath it — all trace back to the **same** root cause: two
+separate systems compute "what's happening right now" independently, and
+they drift apart. The original page render computes pipeline state once,
+server-side. A polling loop added later updates a narrower, separately-
+computed set of numbers on a timer. Neither knows about the other.
+
+**The fix is structural, not cosmetic:** there is exactly **one** function
+that computes full pipeline state for a directory (this already exists —
+`_compute_pipeline_state()` in `services/pipeline.py` from the earlier
+refactor) and produces one object containing everything any part of this
+page needs: the header pill value, the stepper's dot states + "N of 7
+complete" caption, and every stage card's status/button-label/progress-
+percent/count-text. **Every rendering of this page — the initial page
+load, and every poll tick while anything is running — must build its
+entire visible state from one call to this one function, exposed via one
+endpoint.** No element on this page is allowed to have its own separate
+calculation. If a new field is ever needed for one part of the page, it
+gets added to this one object, not computed independently alongside it.
+
+Polling: while **any** stage for this directory is `running` (not just
+Collect), poll this unified endpoint every 2-3 seconds and re-render the
+header pill, the stepper, and every stage card from the response — not
+just whichever card happens to be active. This generalizes what was built
+for Collect last round into a mechanism that also fixes live feedback for
+Clean/Enrich/Upload/Deploy, rather than needing this same exercise
+repeated per stage later.
+
+### No separate "Current Stage" banner — removed
+
+The banner (previously specced as a persistent element above the tabs,
+with its own Pause/Cancel button) is **deleted from the design.** It was a
+second, separately-rendered copy of "what's currently running" — which is
+exactly the "floating badge disconnected from the actual Collect card"
+problem observed in testing. The relevant stage card **is** the current-
+stage indicator: its pill shows Running, its progress bar and count update
+live, and its own action button carries whatever control is available.
+There is no second element anywhere else on the page duplicating this.
+
+### One button per stage card — label always matches current state
+
+This directly replaces the floating Pause badge. Every stage card has
+**exactly one action button**, and its label is always whatever action is
+available right now — it does not sit next to a separate control showing
+the same thing a different way:
+
+| Stage state | Button label | Action |
+|---|---|---|
+| Not started | `Start Collection` (or `Run Cleaning` / etc.) | Triggers the run |
+| Running — Collect only | `Pause` | Real pause, via the existing `dataset-collector` pause endpoint |
+| Paused — Collect only | `Resume` | Resumes the same run |
+| Running — Clean/Enrich/Upload/Deploy | `Cancel` | Stops the subprocess (no real pause/resume exists for these — see below) |
+| Done | `Re-run` | Triggers a fresh run |
+| Error | `Retry` | Triggers a fresh run |
+
+Collection is the only stage with real pause/resume (ported from
+`dataset-collector`); the others get Cancel. Since Clean/Enrich/Upload
+should already skip already-processed records, cancel-and-rerun is a fine
+substitute without new engineering. This table replaces the previous
+"Current Stage banner" Cancel/Pause description — the control now lives
+only on the card, never duplicated elsewhere.
+
+### Layout
+
+**Single-column below 768px** — the current build has a stat tile
+positioned beside the header instead of below it, and it doesn't reflow;
+that's the mobile bug to fix. Layout order, one column, full width, top
+to bottom:
 
 ```
 ← Back to Overview
@@ -399,20 +483,14 @@ order, one column, full width, top to bottom:
                                      never causes horizontal scroll)
 Pet Services • mobilegroomers.com.au
 
-┌─ Current Stage banner (full width, only when running) ─┐
-│  Enriching — AI is generating descriptions...           │
-│  ▓▓▓▓▓▓▓▓░░░░░░  62%   7,714 / 12,418 records            │
-│  [Cancel]                                                │
-└──────────────────────────────────────────────────────┘
-
 ┌──────────────┐ ┌──────────────┐
 │   Places     │ │  Enriched    │   ← 2x2 grid, not a 4-wide row.
-│   12,842     │ │   7,714      │      Confirm all 4 tiles actually
-├──────────────┤ ├──────────────┤      exist in the DOM — only 1 of 4
-│ Avg Quality  │ │   Monthly    │      is visible in the current build,
-│     85       │ │   Visits     │      which may mean the other 3 are
-│              │ │   8,431      │      overflowing off-screen rather
-└──────────────┘ └──────────────┘      than a pure styling issue.
+│   12,842     │ │   7,714      │      All four tiles must read from
+├──────────────┤ ├──────────────┤      the same unified state object —
+│ Avg Quality  │ │   Monthly    │      no separate query for the stat
+│     85       │ │   Visits     │      tiles vs. what the stage cards
+│              │ │   8,431      │      show for the same numbers.
+└──────────────┘ └──────────────┘
 
 🚀 View Live Site — mobilegroomers.com.au    ›
 
@@ -421,8 +499,8 @@ Pet Services • mobilegroomers.com.au
 (active tab's content, below)
 ```
 
-At or above 768px, this becomes the wider layout already built — icon/
-title/pill on one row, 4 stat tiles in a single row, as originally speced:
+At or above 768px: icon/title/pill on one row, 4 stat tiles in a single
+row, same content, wider layout — no Current Stage banner here either.
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -430,14 +508,6 @@ title/pill on one row, 4 stat tiles in a single row, as originally speced:
 ├────────────────────────────────────────────────────────────────┤
 │  ← [icon] Mobile Dog Groomers          ● Live            [⋮]     │
 │    Pet Services • mobilegroomers.com.au                          │
-│                                                                   │
-│  ┌─ Current Stage banner (only visible while something's        │
-│  │  actively running — hidden entirely when idle) ─────────┐     │
-│  │  Enriching — AI is generating descriptions, services,   │     │
-│  │  and SEO content for your listings.                     │     │
-│  │  ▓▓▓▓▓▓▓▓░░░░░░  62%   7,714 / 12,418 records            │     │
-│  │  [Cancel]                                                │     │
-│  └───────────────────────────────────────────────────────┘     │
 │                                                                   │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐            │
 │  │  Places  │ │ Enriched │ │Avg Quality│ │ Monthly  │            │
@@ -456,10 +526,11 @@ title/pill on one row, 4 stat tiles in a single row, as originally speced:
 ```
 
 `[⋮]` opens exactly one option: **Delete Directory** — the only
-destructive action anywhere in the UI, unchanged from before, still
-requires the confirm dialog under "Confirmation & destructive actions".
+destructive action anywhere in the UI, still requires the confirm dialog
+under "Confirmation & destructive actions".
 
-**Stat tiles** — four, always real data, no invented metrics:
+**Stat tiles** — four, always real data, no invented metrics, always from
+the one unified state object:
 - Places Collected
 - Enriched Records (count + % of total collected)
 - Avg Quality Score (average of the `quality_score` column across this
@@ -467,14 +538,17 @@ requires the confirm dialog under "Confirmation & destructive actions".
 - Monthly Visits — em-dash placeholder if not yet deployed, never `0`
   (a real `0` and "not applicable yet" should never look the same)
 
-**Current Stage banner** — only rendered when a script is actively
-`running` for this directory; absent entirely when idle, so it doesn't
-take up space on directories with nothing in progress. The action button
-is **Cancel**, not Pause — there's no real pause/resume for anything
-except Collection (which already has it, ported from `dataset-collector`).
-Cancel just stops the subprocess; since Clean/Enrich/Upload should already
-skip already-processed records on re-run, a cancel-and-rerun is a fine
-substitute for true pause/resume without new engineering.
+**Toasts remain discrete-event-only** (started/complete/error), never
+narrating a continuously-changing percentage — unchanged from the
+previous fix; still correct.
+
+**Runs.db insert-on-start / update-on-finish** — unchanged from the
+previous fix; still correct, keep as-is.
+
+**No stray placeholder characters** — if a timestamp or secondary detail
+line has no value yet (e.g. a stage that hasn't run), hide the element
+entirely. A bare `_` or `—` sitting under a card with nothing else around
+it reads as a rendering bug, not an intentional empty state.
 
 ### Tab: Pipeline (default)
 
@@ -685,6 +759,33 @@ panel treatment** (reverting the earlier light-row instruction there too)
 — same `.log-panel`/`.log-row` structure, just showing the last ~5 entries
 with no expand needed (it's a preview). The "View all →" link takes you to
 this Logs tab.
+
+### Expected log events during Collection
+
+For the Logs tab to actually be useful for Collection specifically,
+`collect.py` needs to emit more than a single start/end line. This is the
+required set — designed to avoid recreating the "wall of unreadable text"
+problem from earlier: **no per-place logging**, and the progress heartbeat
+is throttled, not one line per job.
+
+| When | Log line (example) | Why it earns its place |
+|---|---|---|
+| Run starts | `Starting collection for project 42 (Mobile Dog Groomers) — 3 search terms × 15 metros × 10km grid = 469 jobs` | Establishes the total immediately — matches what the progress bar needs, visible before the first poll tick |
+| Resuming an existing run | `Resuming with 291 pending jobs (178 already complete from a previous run)` | Distinguishes a fresh start from a resume — otherwise a resumed run looks identical to a fresh one in the log |
+| Progress heartbeat (throttled — every 10 jobs or 10 seconds, whichever is coarser, never per-job) | `Progress: 120/469 jobs (26%) — 1,847 places collected, 34 duplicates skipped, 2 failed` | The one line that makes "is this actually moving" answerable by glancing at the log, without 469 lines of noise |
+| A job fails and will retry | `Job 234 failed (attempt 1/3): HTTP 429 — retrying in 4s` | Distinguishes "will recover on its own" from "actually broken" |
+| A job fails permanently | `Job 234 failed after 3 attempts: HTTP 429 — skipping` | The line worth seeing without expanding the full trace — this is what the Logs tab's one-line error summary should show |
+| Rate limited | `Rate limited by Google Places API — backing off 8s` | Explains an otherwise-mysterious slowdown |
+| Pause requested | `Pause requested — finishing current job, then stopping` | Confirms the Pause button actually did something, before the run visibly stops |
+| Paused | `Collection paused at 291/469 jobs (62%)` | Confirms the exact point it stopped at |
+| Resumed | `Resuming collection — 178 jobs remaining` | Mirrors the "resuming" line above, for a mid-run resume specifically |
+| Run completes successfully | `Collection complete: 387 places (352 new, 12 updated, 23 unchanged), 3 jobs failed, took 8m 42s` | The final summary — this is the line that becomes the collapsed row's one-line message in the Logs tab |
+| Run fails before any job completes | `Collection failed to start: invalid API key` | Distinguishes total failure from partial completion — otherwise looks identical to "0 places, still starting" |
+
+This same pattern (start line with a total, throttled progress heartbeat,
+retry/failure lines, completion summary) should be the template for
+Clean/Enrich/Upload/Deploy's own logging too, once those get the same
+attention — not something unique to Collection.
 
 ### Tab: Stats
 

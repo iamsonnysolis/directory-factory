@@ -214,6 +214,13 @@ body {
   border: 1px solid #fca5a5;
 }
 
+/* Info toasts for start/progress events */
+.toast-info {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #93c5fd;
+}
+
 .toast-detail {
   margin-top: 4px;
   font-size: 12px;
@@ -310,6 +317,26 @@ body {
   background: #f8f9fa;
 }
 
+.btn-error {
+  background: var(--color-red);
+  color: white;
+  border-color: var(--color-red);
+}
+
+.btn-error:hover {
+  background: #dc2626;
+}
+
+.btn-warning {
+  background: #f59e0b;
+  color: white;
+  border-color: #f59e0b;
+}
+
+.btn-warning:hover {
+  background: #d97706;
+}
+
 /* Project Grid */
 .project-grid {
   display: grid;
@@ -364,9 +391,6 @@ body {
 .project-card-name {
   font-size: 16px;
   font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .dir-link {
@@ -389,7 +413,6 @@ body {
   font-weight: 500;
   text-transform: none;
   letter-spacing: normal;
-  white-space: nowrap;
   flex-shrink: 0;
 }
 
@@ -397,6 +420,7 @@ body {
 .status-running { background: #dbeafe; color: #1d4ed8; animation: pulse-bg 2s infinite; }
 .status-done { background: #d1fae5; color: #065f46; }
 .status-error { background: #fee2e2; color: #991b1b; }
+.status-paused { background: #fef3c7; color: #92400e; }
 
 .pulse-dot {
   display: inline-block;
@@ -470,8 +494,14 @@ body {
   background: transparent;
 }
 
+/* Paused: filled amber circle (no pulse) */
+.stepper-dot.paused {
+  background: var(--color-blue);
+  border: 2px solid var(--color-blue);
+}
+
 /* Not yet reached: empty outlined grey circle (no fill, no inner dot) */
-.stepper-dot:not(.done):not(.current) {
+.stepper-dot:not(.done):not(.current):not(.paused) {
   background: transparent;
   border: 2px solid var(--color-text-secondary);
   color: var(--color-text-secondary);
@@ -494,7 +524,6 @@ body {
   color: var(--color-text-secondary);
   font-weight: 500;
   text-align: center;
-  white-space: nowrap;
   letter-spacing: normal;
 }
 
@@ -854,7 +883,6 @@ body {
   cursor: pointer;
   border-bottom: 3px solid transparent;
   color: var(--color-text-secondary);
-  white-space: nowrap;
 }
 
 .tab.active {
@@ -1242,9 +1270,20 @@ body {
 }
 
 /* On narrow screens, if name is long, pill wraps to its own line */
-@media (max-width: 400px) {
+@media (max-width: 480px) {
   .dir-detail-row {
     flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .dir-detail-link {
+    flex: 1 1 auto;      /* allow shrinking, not forced to fill all width */
+    min-width: 0;
+    padding-right: 8px; /* breathing room before the pill */
+  }
+
+  .status-pill {
+    align-self: center;
   }
 }
 
@@ -1281,9 +1320,43 @@ body {
   font-size: 12px;
   color: var(--color-text-secondary);
   margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.search-terms-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 4px;
+  margin-top: 2px;
+}
+
+.search-term-tag {
+  display: inline-block;
+  background: rgba(20, 184, 166, 0.1);
+  color: var(--color-teal);
+  border: 1px solid rgba(20, 184, 166, 0.3);
+  border-radius: 12px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Directory detail action buttons (Archive / Delete) */
+.detail-action-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  align-items: center;
+}
+
+.detail-action-buttons .btn {
+  font-size: 13px;
+  height: 32px;
+}
+
+/* Prevent buttons from overlapping stat tiles */
+.detail-stat-tiles {
+  margin-top: 0;
 }
 
 /* Status pill wraps below name on mobile if needed */
@@ -1297,7 +1370,6 @@ body {
   font-weight: 500;
   text-transform: none;
   letter-spacing: normal;
-  white-space: nowrap;
   flex-shrink: 0;
 }
 
@@ -1305,6 +1377,7 @@ body {
 .status-running { background: #dbeafe; color: #1d4ed8; animation: pulse-bg 2s infinite; }
 .status-done { background: #d1fae5; color: #065f46; }
 .status-error { background: #fee2e2; color: #991b1b; }
+.status-paused { background: #fef3c7; color: #92400e; }
 
 .pulse-dot {
   display: inline-block;
@@ -1314,6 +1387,31 @@ body {
   background: var(--color-running);
   margin-right: 4px;
   animation: pulse 1.5s infinite;
+}
+
+/* Status row on its own line below the directory name */
+.status-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.status-row .status-pill {
+  font-size: 13px;
+  padding: 4px 12px;
+}
+
+.status-label {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.header-divider {
+  border: none;
+  border-top: 1px solid var(--color-border, #e5e7eb);
+  margin: 0 0 24px 0;
 }
 
 .current-stage-banner {
@@ -1355,7 +1453,6 @@ body {
   height: 6px;
   background: var(--color-border);
   border-radius: 3px;
-  overflow: hidden;
 }
 
 .progress-fill {
@@ -1583,7 +1680,6 @@ body {
   background: #0d1117;
   border-radius: 8px;
   font-family: 'SFMono-Regular', Consolas, monospace;
-  overflow: hidden;
 }
 
 .log-row { border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
@@ -1623,9 +1719,6 @@ body {
 .log-message {
   color: #9ca3af;
   font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   flex: 1;
 }
 
@@ -1830,3 +1923,106 @@ body {
     padding: 20px;
   }
 }
+
+/* ─── Stage Card Expand (accordion) ────────────────────────────────── */
+.stage-expand-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  transition: transform 0.2s ease;
+}
+
+.stage-expand-btn:hover {
+  color: var(--color-text);
+}
+
+.stage-card.expanded .stage-expand-btn {
+  transform: rotate(180deg);
+}
+
+.stage-card-expand {
+  max-height: 0;
+  transition: max-height 0.3s ease;
+  margin-top: 0;
+}
+
+.stage-card.expanded .stage-card-expand {
+  max-height: 600px;
+  margin-top: 12px;
+}
+
+.stage-expand-loading {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  padding: 8px 0;
+}
+
+.stage-expand-empty {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  padding: 12px 0;
+}
+
+.stage-expand-error {
+  font-size: 13px;
+  color: var(--color-error);
+  padding: 12px 0;
+}
+
+/* Places table in expanded Collect card */
+.places-expand {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.places-filter-bar {
+  display: flex;
+  gap: 8px;
+}
+
+.places-search {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-input-bg);
+  color: var(--color-text);
+}
+
+.completeness-filter {
+  padding: 4px 10px;
+  font-size: 13px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-input-bg);
+  color: var(--color-text);
+}
+
+.places-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.places-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.places-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-border-light);
+  color: var(--color-text);
+}
+

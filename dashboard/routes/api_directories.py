@@ -14,7 +14,7 @@ from ..config import PROJECT_ROOT
 from ..db import _connect_collector, _connect_runs, _read_env
 from ..models import DirectoryCreate, RunScriptRequest
 from ..services.directories import build_directory_card, _directory_counts
-from ..services.pipeline import _compute_pipeline_state, _current_stage_label
+from ..services.pipeline import _compute_pipeline_state, _current_stage_label, _full_page_state
 
 logger = logging.getLogger("dashboard")
 
@@ -46,7 +46,7 @@ async def api_directories(
     try:
         rows = conn.execute(
             "SELECT id, name, slug, country, status, field_tier, search_step_km, created_at, updated_at "
-            "FROM projects ORDER BY created_at DESC"
+            "FROM projects WHERE status != 'archived' ORDER BY created_at DESC"
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []
@@ -247,6 +247,44 @@ async def api_delete_directory(directory_id: int):
     return JSONResponse(content={"success": True, "message": f"Deleted directory {directory_id}"})
 
 
+@router.post("/api/directories/{directory_id}/archive")
+async def api_archive_directory(directory_id: int):
+    """Archive a directory — sets status to 'archived', filtered from main views."""
+    conn = _connect_collector()
+    try:
+        proj = conn.execute("SELECT id, status FROM projects WHERE id = ?", (directory_id,)).fetchone()
+        if not proj:
+            raise HTTPException(status_code=404, detail="Directory not found")
+        conn.execute("UPDATE projects SET status = 'archived' WHERE id = ?", (directory_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse(content={
+        "success": True,
+        "message": f"Directory {directory_id} archived",
+        "status": "archived",
+    })
+
+
+@router.post("/api/directories/{directory_id}/unarchive")
+async def api_unarchive_directory(directory_id: int):
+    """Unarchive a directory — restores status to 'idle'."""
+    conn = _connect_collector()
+    try:
+        proj = conn.execute("SELECT id, status FROM projects WHERE id = ?", (directory_id,)).fetchone()
+        if not proj:
+            raise HTTPException(status_code=404, detail="Directory not found")
+        conn.execute("UPDATE projects SET status = 'idle' WHERE id = ?", (directory_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse(content={
+        "success": True,
+        "message": f"Directory {directory_id} unarchived",
+        "status": "idle",
+    })
+
+
 @router.post("/api/directories/{directory_id}/run")
 async def api_run_script(directory_id: int, body: RunScriptRequest):
     """Trigger a standardized script via the Phase 3 runner.
@@ -433,6 +471,120 @@ async def api_collection_progress(directory_id: int):
     return JSONResponse(content=progress)
 
 
+@router.post("/api/directories/{directory_id}/pause")
+async def api_pause_collection(directory_id: int):
+    """Pause an actively running collection.
+
+    Sets the project status to 'paused'. The collector loop checks
+    project.status each cycle — when it sees 'paused' instead of 'running'
+    it stops acquiring new jobs and exits cleanly.
+
+    Note: jobs already marked 'running' in the DB will continue to
+    completion; only new job acquisition stops.
+    """
+    conn = _connect_collector()
+    try:
+        proj = conn.execute(
+            "SELECT id, status FROM projects WHERE id = ?", (directory_id,)
+        ).fetchone()
+        if not proj:
+            raise HTTPException(status_code=404, detail="Directory not found")
+        conn.execute(
+            "UPDATE projects SET status = 'paused' WHERE id = ?", (directory_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse(content={
+        "success": True,
+        "status": "paused",
+        "message": f"Collection paused for directory {directory_id}",
+    })
+
+
+@router.post("/api/directories/{directory_id}/resume")
+async def api_resume_collection(directory_id: int):
+    """Resume a paused collection.
+
+    Collection is the one stage with real pause/resume:
+    /pause sets project.status='paused' (collector loop stops acquiring
+    jobs); /resume sets project.status='running' (or 'idle' first so the
+    collector loop picks it up) and re-triggers collection.collect via the
+    runner.
+    """
+    conn = _connect_collector()
+    try:
+        proj = conn.execute(
+            "SELECT id, status FROM projects WHERE id = ?", (directory_id,)
+        ).fetchone()
+        if not proj:
+            raise HTTPException(status_code=404, detail="Directory not found")
+        conn.execute(
+            "UPDATE projects SET status = 'running' WHERE id = ?", (directory_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    # Re-trigger collection via the runner
+    from runner.run import run_script
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, lambda: run_script("collection.collect", directory_id, {})
+        )
+    except Exception as e:
+        logger.error(f"Resume collection failed for directory {directory_id}: {e}")
+    return JSONResponse(content={
+        "success": True,
+        "status": "running",
+        "message": f"Collection resumed for directory {directory_id}",
+    })
+
+
+@router.post("/api/directories/{directory_id}/cancel")
+async def api_cancel_run(directory_id: int):
+    """Cancel the currently running stage for a directory.
+
+    Collection is special — it has real pause/resume (unlike other stages
+    which only support Cancel). The Current Stage banner
+    shows Pause for collection (wired to /pause), and Cancel for other stages
+    (wired to /cancel here).
+
+    For collection, this sets project status to 'cancelled' so the
+    collector loop exits. For other stages, this kills the background
+    subprocess in runs.db by updating the run record.
+    """
+    conn = _connect_collector()
+    try:
+        proj = conn.execute(
+            "SELECT id, status FROM projects WHERE id = ?", (directory_id,)
+        ).fetchone()
+        if not proj:
+            raise HTTPException(status_code=404, detail="Directory not found")
+        conn.execute(
+            "UPDATE projects SET status = 'cancelled' WHERE id = ?", (directory_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    # Also mark any in-progress runs in runs.db as cancelled
+    try:
+        conn_runs = _connect_runs()
+        conn_runs.execute(
+            "UPDATE runs SET status = 'error', summary = 'Cancelled by user' "
+            "WHERE project_id = ? AND status = 'running'",
+            (directory_id,)
+        )
+        conn_runs.commit()
+        conn_runs.close()
+    except Exception:
+        pass
+    return JSONResponse(content={
+        "success": True,
+        "message": f"Run cancelled for directory {directory_id}",
+    })
+
+
 @router.get("/api/directories/{directory_id}/cleaned")
 async def api_cleaned_data(directory_id: int, search: str = "",
                             min_completeness: int = 0, limit: int = 100, offset: int = 0):
@@ -532,3 +684,51 @@ async def api_enriched_data(directory_id: int, search: str = "",
         "limit": limit,
         "offset": offset,
     })
+
+
+@router.get("/api/directories/{directory_id}/pipeline-state")
+async def api_pipeline_state(directory_id: int):
+    """Single source of truth for the Directory Detail page.
+
+    Returns the complete pipeline state for a directory in one object,
+    including header pill, stepper, stat tiles, stage cards, and activity.
+    Every render — initial page load and every poll tick — builds its
+    entire visible state from this single endpoint.
+    """
+    from ..services.pipeline import _full_page_state
+    try:
+        state = _full_page_state(directory_id)
+        return JSONResponse(content=state)
+    except Exception as e:
+        logger.error(f"pipeline-state failed for directory {directory_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/directories/{directory_id}/runs")
+async def api_runs(directory_id: int, script: str = None, limit: int = 5):
+    """Return recent runs for a directory, optionally filtered by script."""
+    from ..db import _connect_runs
+    import sqlite3
+    conn = _connect_runs()
+    conn.row_factory = sqlite3.Row
+    try:
+        if script:
+            rows = conn.execute(
+                "SELECT id, script_name, status, started_at, finished_at, summary, error, stdout, stderr "
+                "FROM runs WHERE project_id = ? AND script_name = ? "
+                "ORDER BY started_at DESC LIMIT ?",
+                (directory_id, script, limit)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, script_name, status, started_at, finished_at, summary, error, stdout, stderr "
+                "FROM runs WHERE project_id = ? "
+                "ORDER BY started_at DESC LIMIT ?",
+                (directory_id, limit)
+            ).fetchall()
+        runs = [dict(r) for r in rows]
+    except Exception:
+        runs = []
+    finally:
+        conn.close()
+    return JSONResponse(content={"runs": runs})

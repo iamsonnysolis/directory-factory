@@ -89,7 +89,7 @@ def get_active_field_tier() -> str:
 
 def get_active_fields() -> list[str]:
     """Get the list of fields for the active tier (cumulative)."""
-    tier = get_active_field_tier()
+    tier = (get_active_field_tier() or "").lower()
     fields = []
     if tier == "pro":
         fields = FIELD_TIERS["essentials"] + FIELD_TIERS["pro"]

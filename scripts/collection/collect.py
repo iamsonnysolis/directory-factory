@@ -157,6 +157,27 @@ def _set_project_status(project_id: int, status: str):
     asyncio.run(_do())
 
 
+def _get_target_metros(project_id: int, project=None) -> list:
+    """Read target_metros from site_config in runs.db (if available)."""
+    import sqlite3
+    target_metros = []
+    try:
+        project_root = os.path.dirname(os.path.dirname(_SCRIPTS_DIR))
+        runs_db = os.path.join(project_root, "runs.db")
+        conn = sqlite3.connect(runs_db)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT config_json FROM site_config WHERE project_id = ?", (project_id,)
+        ).fetchone()
+        conn.close()
+        if row:
+            cfg = json.loads(row["config_json"])
+            target_metros = cfg.get("target_metros", []) or []
+    except Exception:
+        pass
+    return target_metros
+
+
 @script_main
 def main(project_id: int, params: dict) -> dict:
     """Run collection for a project.
@@ -169,52 +190,82 @@ def main(project_id: int, params: dict) -> dict:
     """
     from database import AsyncSessionLocal
     from sqlalchemy import select, func
-    from models import Place, Job, SearchTerm
-    print(f"[collection.collect] Starting collection for project {project_id}")
+    from models import Place, Job, SearchTerm, Project
+    import time as _time
+    _run_start = _time.time()
 
-    # Step 1: Generate jobs + set status to running (mirrors dataset-collector's /start endpoint)
-    print(f"[collection.collect] Preparing project {project_id}...")
+    # ─── Spec-required log: Run starts ─────────────────────────────────────────
+    # Need project name, search terms, metros, grid points for the start line
+    async def _gather_start_info():
+        async with AsyncSessionLocal() as db:
+            proj = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
+            terms_result = await db.execute(select(SearchTerm.term).where(SearchTerm.project_id == project_id))
+            terms = [t[0] for t in terms_result.fetchall()]
+            job_result = await db.execute(select(func.count(Job.id)).where(Job.project_id == project_id))
+            total_jobs = job_result.scalar() or 0
+            # Count pending vs complete to detect resume
+            complete_result = await db.execute(
+                select(func.count(Job.id)).where(Job.project_id == project_id, Job.status == "complete")
+            )
+            complete_jobs = complete_result.scalar() or 0
+            return proj, terms, total_jobs, complete_jobs
+    proj, search_terms, total_jobs, complete_jobs = asyncio.run(_gather_start_info())
+
+    if not search_terms:
+        print(f"[collection.collect] Collection failed to start: No search terms configured for project {project_id}")
+        return {
+            "status": "error",
+            "summary": None,
+            "counts": {},
+            "error": "No search terms configured for this project. Add search terms in the Config tab before running collection.",
+        }
+
+    # Generate jobs + set status to running (mirrors dataset-collector's /start endpoint)
     jobs_added = _prepare_project(project_id)
 
-    print(f"[collection.collect] Jobs generated: {jobs_added}")
+    # Determine if this is a fresh start or a resume
+    if jobs_added > 0:
+        # Fresh start — need metro and grid info for the spec's start line
+        from services.grid_strategy import METRO_AREAS, generate_grid_points, grid_search_radius_meters
+        target_metros = _get_target_metros(project_id, proj)
+        metro_count = len(target_metros) if target_metros else len(METRO_AREAS)
+        step_km = proj.search_step_km or settings.SEARCH_STEP_KM
+        grid_points_per_metro = 0
+        # Estimate grid points from the first metro
+        if target_metros:
+            grid_points_per_metro = len(generate_grid_points(target_metros[0], step_km))
+        elif METRO_AREAS:
+            first_metro = list(METRO_AREAS.keys())[0]
+            grid_points_per_metro = len(generate_grid_points(first_metro, step_km))
 
-    # Check if any search terms exist — if not, collection will produce 0 results
-    if jobs_added == 0:
-        # Check if search terms exist — jobs may already exist from a prior run
-        async def _check_search_terms():
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(select(SearchTerm.term).where(SearchTerm.project_id == project_id))
-                terms = [t[0] for t in result.fetchall()]
-                result2 = await db.execute(select(func.count(Job.id)).where(Job.project_id == project_id))
-                existing_jobs = result2.scalar() or 0
-                return terms, existing_jobs
-        search_terms, existing_jobs = asyncio.run(_check_search_terms())
-        if not search_terms:
-            print(f"[collection.collect] ERROR: No search terms configured for project {project_id}")
-            return {
-                "status": "error",
-                "summary": None,
-                "counts": {},
-                "error": "No search terms configured for this project. Add search terms in the Config tab before running collection.",
-            }
-        if existing_jobs > 0:
-            print(f"[collection.collect] Jobs already exist ({existing_jobs}), skipping generation")
-
-    # Log project details
-    async def _log_details():
-        async with AsyncSessionLocal() as db:
-            terms = await db.execute(select(SearchTerm.term).where(SearchTerm.project_id == project_id))
-            search_terms = [t[0] for t in terms.fetchall()]
-            print(f"[collection.collect] Search terms: {search_terms}")
-    asyncio.run(_log_details())
+        print(f"[collection.collect] Starting collection for project {project_id} ({proj.name}) — "
+              f"{len(search_terms)} search terms × {metro_count} metros × {grid_points_per_metro} grid points = {total_jobs} jobs")
+    else:
+        # Resume — jobs already exist from a prior run
+        pending_jobs = total_jobs - complete_jobs
+        print(f"[collection.collect] Starting collection for project {project_id} ({proj.name}) — "
+              f"{total_jobs} total jobs ({complete_jobs} already complete from a previous run)")
+        if complete_jobs > 0:
+            print(f"[collection.collect] Resuming with {pending_jobs} pending jobs ({complete_jobs} already complete from a previous run)")
 
     # Step 2: Run collection
-    print(f"[collection.collect] Starting background collection engine...")
+    print(f"[collection.collect] Running collection engine...")
     asyncio.run(collect_project(project_id))
 
-    # Step 3: Set status to complete
-    print(f"[collection.collect] Collection engine finished, setting project status to 'complete'")
-    _set_project_status(project_id, "complete")
+    # Step 3: Set status to complete (unless paused/cancelled)
+    # Check current status — if user paused during collection, preserve it
+    async def _check_status():
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Project).where(Project.id == project_id))
+            project = result.scalar_one_or_none()
+            if project:
+                return project.status
+            return None
+    current_status = asyncio.run(_check_status())
+    if current_status == "paused":
+        print(f"[collection.collect] Collection paused by user — keeping status='paused'")
+    else:
+        _set_project_status(project_id, "complete")
 
     # Step 4: Count results
     async def _count():
@@ -229,19 +280,20 @@ def main(project_id: int, params: dict) -> dict:
             job_count = job_result.scalar() or 0
 
             # Count by status
-            complete_jobs = await db.execute(
+            complete_jobs_result = await db.execute(
                 select(func.count(Job.id)).where(Job.project_id == project_id, Job.status == "complete")
             )
-            failed_jobs = await db.execute(
+            failed_jobs_result = await db.execute(
                 select(func.count(Job.id)).where(Job.project_id == project_id, Job.status == "failed")
             )
 
-            print(f"[collection.collect] Results: {place_count} places collected from {complete_jobs.scalar() or 0} successful jobs ({failed_jobs.scalar() or 0} failed, {job_count} total)")
+            print(f"[collection.collect] Results: {place_count} places collected from {complete_jobs_result.scalar() or 0} successful jobs ({failed_jobs_result.scalar() or 0} failed, {job_count} total)")
             return place_count, job_count
 
     place_count, job_count = asyncio.run(_count())
 
-    print(f"[collection.collect] Collection complete for project {project_id}")
+    _elapsed = int(_time.time() - _run_start)
+    print(f"[collection.collect] Collection complete: {place_count} places, {job_count} jobs, took {_elapsed}s")
 
     return {
         "summary": f"Collection complete for project {project_id}: {place_count} places, {job_count} jobs ({jobs_added} new jobs added)",
