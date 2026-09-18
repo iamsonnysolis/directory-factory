@@ -262,7 +262,7 @@ def d1_execute(
     if not resp.ok:
         raise RuntimeError(
             f"Cloudflare D1 execute failed "
-            f"({resp.status_code}): {resp.text}"
+            f"({resp.status_code}) for SQL: {sql_statements[:200]}...: {resp.text}"
         )
     resp.raise_for_status()
     data = resp.json()
@@ -497,8 +497,8 @@ def build_business_upsert_sql(record: dict) -> str:
         sql_str(record.get("address") or record.get("formatted_address")),
         sql_str(record.get("state_code")),
         sql_str(record.get("postal_code")),
-        sql_str(record.get("lat") or record.get("latitude")),
-        sql_str(record.get("lng") or record.get("longitude")),
+        sql_str(record.get("lat") or record.get("latitude") or 0.0),
+        sql_str(record.get("lng") or record.get("longitude") or 0.0),
         sql_str(record.get("phone") or record.get("national_phone")),
         sql_str(record.get("website")),
         sql_str(record.get("is_mobile_service", False)),
@@ -811,10 +811,10 @@ def upload_project(project_id: int, params: dict) -> dict:
         biz_count = st.get("business_count", 0)
         now = datetime.now(timezone.utc).isoformat()
         stmt = (
-            f"INSERT INTO states (code, name, slug, business_count, updated_at) "
-            f"VALUES ({sql_str(code)}, {sql_str(name)}, {sql_str(slug)}, {sql_str(biz_count)}, {sql_str(now)}) "
+            f"INSERT INTO states (code, name, slug, business_count) "
+            f"VALUES ({sql_str(code)}, {sql_str(name)}, {sql_str(slug)}, {sql_str(biz_count)}) "
             f"ON CONFLICT(code) DO UPDATE SET name=excluded.name, slug=excluded.slug, "
-            f"business_count=excluded.business_count, updated_at=excluded.updated_at"
+            f"business_count=excluded.business_count"
         )
         all_statements.append(stmt)
 
@@ -828,10 +828,10 @@ def upload_project(project_id: int, params: dict) -> dict:
         biz_count = reg.get("business_count", 0)
         now = datetime.now(timezone.utc).isoformat()
         stmt = (
-            f"INSERT INTO regions (slug, state_code, name, business_count, updated_at) "
-            f"VALUES ({sql_str(slug)}, {sql_str(state_code)}, {sql_str(name)}, {sql_str(biz_count)}, {sql_str(now)}) "
+            f"INSERT INTO regions (slug, state_code, name, business_count) "
+            f"VALUES ({sql_str(slug)}, {sql_str(state_code)}, {sql_str(name)}, {sql_str(biz_count)}) "
             f"ON CONFLICT(slug, state_code) DO UPDATE SET name=excluded.name, "
-            f"business_count=excluded.business_count, updated_at=excluded.updated_at"
+            f"business_count=excluded.business_count"
         )
         all_statements.append(stmt)
 
@@ -846,11 +846,10 @@ def upload_project(project_id: int, params: dict) -> dict:
         biz_count = sub.get("business_count", 0)
         now = datetime.now(timezone.utc).isoformat()
         stmt = (
-            f"INSERT INTO suburbs (slug, state_code, name, postcode, business_count, updated_at) "
-            f"VALUES ({sql_str(slug)}, {sql_str(state_code)}, {sql_str(name)}, {sql_str(postcode)}, {sql_str(biz_count)}, {sql_str(now)}) "
+            f"INSERT INTO suburbs (slug, state_code, name, postcode, business_count) "
+            f"VALUES ({sql_str(slug)}, {sql_str(state_code)}, {sql_str(name)}, {sql_str(postcode)}, {sql_str(biz_count)}) "
             f"ON CONFLICT(slug, state_code) DO UPDATE SET name=excluded.name, "
-            f"postcode=excluded.postcode, business_count=excluded.business_count, "
-            f"updated_at=excluded.updated_at"
+            f"postcode=excluded.postcode, business_count=excluded.business_count"
         )
         all_statements.append(stmt)
 
@@ -918,12 +917,12 @@ def upload_project(project_id: int, params: dict) -> dict:
 
     # Get geography ids (state code, region slug+state_code, suburb slug+state_code)
     geo_lookup = d1_execute(account_id, database_id,
-        "SELECT id, code FROM states; "
+        "SELECT code FROM states; "
         "SELECT id, slug, state_code FROM regions; "
         "SELECT id, slug, state_code FROM suburbs;",
         api_token)
 
-    state_id_map = {}   # code → id
+    state_id_map = {}    # code → code (states uses code as PK, no id column)
     region_id_map = {}  # (slug, state_code) → id
     suburb_id_map = {}  # (slug, state_code) → id
 
@@ -938,8 +937,8 @@ def upload_project(project_id: int, params: dict) -> dict:
             for row in results:
                 if not isinstance(row, dict):
                     continue
-                if idx == 0:  # states
-                    state_id_map[row["code"]] = row["id"]
+                if idx == 0:  # states — code is the primary key
+                    state_id_map[row["code"]] = row["code"]
                 elif idx == 1:  # regions
                     region_id_map[(row["slug"], row["state_code"])] = row["id"]
                 elif idx == 2:  # suburbs
@@ -954,8 +953,8 @@ def upload_project(project_id: int, params: dict) -> dict:
         updates = []
 
         state_code = record.get("state_code")
-        if state_code and state_code in state_id_map:
-            updates.append(f"state_id = {state_id_map[state_code]}")
+        # states.code is a direct TEXT FK on businesses (no state_id column),
+        # so no UPDATE is needed here — it was set via INSERT.
 
         region_slug = record.get("region_slug")
         if region_slug and state_code and (region_slug, state_code) in region_id_map:

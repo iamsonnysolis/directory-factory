@@ -7,27 +7,29 @@
 -- GEOGRAPHY
 
 -- Natural key — the one deliberate exception to "every table uses id".
-CREATE TABLE states (
+CREATE TABLE IF NOT EXISTS states (
     code TEXT PRIMARY KEY,              -- e.g. 'QLD'
     name TEXT NOT NULL,                 -- e.g. 'Queensland'
     slug TEXT NOT NULL UNIQUE,          -- e.g. 'queensland'
-    business_count INTEGER NOT NULL DEFAULT 0
+    business_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Populated from Places API addressComponents
 -- (administrative_area_level_2) during Phase 2 Cleaning — no
 -- shapefile, no spatial join.
-CREATE TABLE regions (
+CREATE TABLE IF NOT EXISTS regions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,                 -- e.g. 'Brisbane'
     slug TEXT NOT NULL,
     state_code TEXT NOT NULL REFERENCES states(code),
     business_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(slug, state_code)
 );
-CREATE INDEX regions_state_code_idx ON regions(state_code);
+CREATE INDEX IF NOT EXISTS regions_state_code_idx ON regions(state_code);
 
-CREATE TABLE suburbs (
+CREATE TABLE IF NOT EXISTS suburbs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     slug TEXT NOT NULL,
@@ -35,14 +37,15 @@ CREATE TABLE suburbs (
     region_id INTEGER REFERENCES regions(id),   -- nullable, see above
     postcode TEXT,
     business_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(slug, state_code)
 );
-CREATE INDEX suburbs_state_code_idx ON suburbs(state_code);
-CREATE INDEX suburbs_region_id_idx ON suburbs(region_id);
+CREATE INDEX IF NOT EXISTS suburbs_state_code_idx ON suburbs(state_code);
+CREATE INDEX IF NOT EXISTS suburbs_region_id_idx ON suburbs(region_id);
 
 -- CORE ENTITY
 
-CREATE TABLE businesses (
+CREATE TABLE IF NOT EXISTS businesses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     google_place_id TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
@@ -80,10 +83,10 @@ CREATE TABLE businesses (
 
     UNIQUE(slug, suburb_id)
 );
-CREATE INDEX businesses_suburb_id_idx ON businesses(suburb_id);
-CREATE INDEX businesses_region_id_idx ON businesses(region_id);
-CREATE INDEX businesses_state_code_idx ON businesses(state_code);
-CREATE INDEX businesses_slug_idx ON businesses(slug);
+CREATE INDEX IF NOT EXISTS businesses_suburb_id_idx ON businesses(suburb_id);
+CREATE INDEX IF NOT EXISTS businesses_region_id_idx ON businesses(region_id);
+CREATE INDEX IF NOT EXISTS businesses_state_code_idx ON businesses(state_code);
+CREATE INDEX IF NOT EXISTS businesses_slug_idx ON businesses(slug);
 
 -- Note: description / meta_description / seo_keywords are NOT columns
 -- here — that text lives in the `content` table (entity_type='business'),
@@ -93,16 +96,16 @@ CREATE INDEX businesses_slug_idx ON businesses(slug);
 
 -- FEATURES / HOURS
 
-CREATE TABLE business_features (
+CREATE TABLE IF NOT EXISTS business_features (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
     feature_key TEXT NOT NULL,
     UNIQUE(business_id, feature_key)
 );
-CREATE INDEX business_features_business_id_idx ON business_features(business_id);
-CREATE INDEX business_features_key_idx ON business_features(feature_key);
+CREATE INDEX IF NOT EXISTS business_features_business_id_idx ON business_features(business_id);
+CREATE INDEX IF NOT EXISTS business_features_key_idx ON business_features(feature_key);
 
-CREATE TABLE business_hours (
+CREATE TABLE IF NOT EXISTS business_hours (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
     day_of_week INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
@@ -111,12 +114,12 @@ CREATE TABLE business_hours (
     is_closed INTEGER NOT NULL DEFAULT 0,
     UNIQUE(business_id, day_of_week)
 );
-CREATE INDEX business_hours_business_id_idx ON business_hours(business_id);
+CREATE INDEX IF NOT EXISTS business_hours_business_id_idx ON business_hours(business_id);
 
 -- SERVICES — with pricing fields, ready for whenever pricing
 -- data becomes available (not required to be populated now)
 
-CREATE TABLE business_services (
+CREATE TABLE IF NOT EXISTS business_services (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
     service_name TEXT NOT NULL,          -- e.g. 'Nail Trimming'
@@ -126,11 +129,11 @@ CREATE TABLE business_services (
     price_unit TEXT,                     -- e.g. 'per visit', 'per hour', 'flat fee'
     UNIQUE(business_id, service_name)
 );
-CREATE INDEX business_services_business_id_idx ON business_services(business_id);
+CREATE INDEX IF NOT EXISTS business_services_business_id_idx ON business_services(business_id);
 
 -- CONTENT (EEAT)
 
-CREATE TABLE content (
+CREATE TABLE IF NOT EXISTS content (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entity_type TEXT NOT NULL CHECK (entity_type IN ('state','region','suburb','business')),
     entity_id TEXT NOT NULL,             -- states: the code (e.g. 'QLD'); others: the integer id, as text
@@ -143,11 +146,11 @@ CREATE TABLE content (
     generated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(entity_type, entity_id, content_type)
 );
-CREATE INDEX content_entity_idx ON content(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS content_entity_idx ON content(entity_type, entity_id);
 
 -- SITE CONFIG
 
-CREATE TABLE site_config (
+CREATE TABLE IF NOT EXISTS site_config (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key TEXT NOT NULL UNIQUE,
     value TEXT,
