@@ -600,35 +600,35 @@ def resolve_ids_placeholder(slugs_sql: str) -> str:
 
 # ─── Main upload logic ─────────────────────────────────────────────────────────
 
-def _save_database_id_to_env(database_id: str) -> None:
-    """Persists a created D1 database UUID back to .env so subsequent runs reuse it.
+def _project_d1_config_path(project_id: int) -> str:
+    """Returns the per-project D1 config file path for storing the database UUID."""
+    return os.path.join(_DATA_DIR, str(project_id), "d1_database_id")
 
-    Updates the existing D1_DATABASE_ID line in-place, or appends it if missing.
+
+def _save_database_id_to_project(project_id: int, database_id: str) -> None:
+    """Persists a created D1 database UUID to a per-project config file.
+
+    Uses ``data/<project_id>/d1_database_id`` so each directory has its own
+    database UUID (one D1 database per directory, per the architecture decision).
     """
-    env_path = os.path.join(_PROJECT_ROOT, ".env")
-    if not os.path.isfile(env_path):
-        logger.warning(f".env file not found at {env_path} — cannot persist D1_DATABASE_ID")
-        return
+    config_path = _project_d1_config_path(project_id)
+    config_dir = os.path.dirname(config_path)
+    os.makedirs(config_dir, exist_ok=True)
+    with open(config_path, "w") as f:
+        f.write(database_id)
+    logger.info(f"Persisted D1_DATABASE_ID={database_id} to {config_path}")
 
-    lines = []
-    found = False
-    with open(env_path) as f:
-        for line in f:
-            stripped = line.strip()
-            if stripped.startswith("D1_DATABASE_ID="):
-                if not found:
-                    lines.append(f"D1_DATABASE_ID={database_id}\n")
-                    found = True
-            else:
-                lines.append(line)
 
-    if not found:
-        lines.append(f"D1_DATABASE_ID={database_id}\n")
+def _load_database_id_from_project(project_id: int) -> str | None:
+    """Reads the D1 database UUID from the per-project config file.
 
-    with open(env_path, "w") as f:
-        f.writelines(lines)
-
-    logger.info(f"Persisted D1_DATABASE_ID={database_id} to .env")
+    Returns None if the file doesn't exist.
+    """
+    config_path = _project_d1_config_path(project_id)
+    if os.path.isfile(config_path):
+        with open(config_path) as f:
+            return f.read().strip()
+    return None
 
 
 def upload_project(project_id: int, params: dict) -> dict:
@@ -642,7 +642,8 @@ def upload_project(project_id: int, params: dict) -> dict:
             - ``site_name``: Brand name for the directory
         Optional params:
             - ``d1_database_id``: D1 database UUID. If not provided, a new D1
-              database is auto-created and the UUID is saved to .env.
+              database is auto-created and the UUID is saved to a per-project
+              config file (``data/<project_id>/d1_database_id``).
             - ``d1_api_token``: (optional) Cloudflare API token. If not
               provided, falls back to ``CLOUDFLARE_API_TOKEN`` env var.
         Optional params:
@@ -655,7 +656,12 @@ def upload_project(project_id: int, params: dict) -> dict:
     # ── Validate required params ─────────────────────────────────────────────
     dry_run = params.get("dry_run", False)
     account_id = params.get("d1_account_id") or os.getenv("CLOUDFLARE_ACCOUNT_ID")
-    database_id = params.get("d1_database_id") or os.getenv("D1_DATABASE_ID")
+    # ── Resolve database_id: params → project config → .env → auto-create ──
+    database_id = params.get("d1_database_id")
+    if not database_id:
+        database_id = _load_database_id_from_project(project_id)
+    if not database_id:
+        database_id = os.getenv("D1_DATABASE_ID")  # fallback: .env shared var
     site_name = params.get("site_name", "Directory Factory")
 
     if not dry_run:
@@ -679,7 +685,7 @@ def upload_project(project_id: int, params: dict) -> dict:
         db_name = f"d1-{site_slug}-{project_id}"
         logger.info(f"No D1_DATABASE_ID found — creating new D1 database '{db_name}'")
         database_id = d1_create_database(account_id, db_name, api_token)
-        _save_database_id_to_env(database_id)
+        _save_database_id_to_project(project_id, database_id)
 
     # At this point database_id is guaranteed to be set for real runs
     # (created above if missing). In dry-run mode it can be None.
